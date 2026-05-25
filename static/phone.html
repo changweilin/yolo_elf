@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>YOLO Elf Phone</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <main class="camera-shell">
+      <section class="camera-stage" aria-label="camera preview">
+        <video id="cameraVideo" autoplay muted playsinline></video>
+        <canvas id="overlayCanvas"></canvas>
+      </section>
+
+      <header class="hud topbar">
+        <div class="brand">YOLO Elf</div>
+        <div class="status-row">
+          <span id="cameraStatus" class="chip warn">相機待命</span>
+          <span id="socketStatus" class="chip warn">連線待命</span>
+          <span id="detectStatus" class="chip warn">尚無偵測</span>
+        </div>
+      </header>
+
+      <section class="hud controls">
+        <button id="startButton" class="primary" type="button">▶ 啟動</button>
+        <button id="stopButton" type="button" disabled>■ 停止</button>
+        <label class="control-field" for="fpsInput">
+          FPS
+          <input id="fpsInput" type="number" min="1" max="30" step="1" value="10" />
+        </label>
+        <label class="control-field" for="qualityInput">
+          JPEG
+          <input id="qualityInput" type="number" min="0.3" max="0.95" step="0.05" value="0.65" />
+        </label>
+      </section>
+
+      <canvas id="captureCanvas" hidden></canvas>
+    </main>
+    <script type="module" src="/static/phone.js"></script>
+  </body>
+</html>

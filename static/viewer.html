@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YOLO Elf Viewer</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <main class="viewer-shell">
+      <section class="viewer-stage" aria-label="detected stream">
+        <img id="viewerImage" alt="" />
+        <canvas id="viewerOverlay"></canvas>
+        <div id="emptyState" class="empty-state">等待手機影像</div>
+      </section>
+
+      <header class="hud topbar">
+        <div class="brand">YOLO Elf</div>
+        <div class="status-row">
+          <span id="viewerSocketStatus" class="chip warn">viewer 待命</span>
+          <span id="cameraLinkStatus" class="chip warn">phone 離線</span>
+          <span id="modelStatus" class="chip warn">model 待載入</span>
+        </div>
+      </header>
+
+      <aside class="viewer-panel">
+        <div class="panel-header">
+          <span class="panel-title">偵測狀態</span>
+          <a href="/phone" target="_blank" rel="noreferrer">
+            <button type="button">↗ 手機頁</button>
+          </a>
+        </div>
+        <div class="metric-grid">
+          <div class="metric">
+            <div class="metric-label">Frame</div>
+            <div id="frameMetric" class="metric-value">-</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Boxes</div>
+            <div id="boxesMetric" class="metric-value">-</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Inference</div>
+            <div id="inferenceMetric" class="metric-value">-</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Dropped</div>
+            <div id="droppedMetric" class="metric-value">-</div>
+          </div>
+        </div>
+        <div id="errorLine" class="error-line" hidden></div>
+      </aside>
+    </main>
+    <script type="module" src="/static/viewer.js"></script>
+  </body>
+</html>
