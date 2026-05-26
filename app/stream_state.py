@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -124,9 +123,8 @@ class StreamHub:
         if not viewers:
             return
 
-        viewer_payload = self._viewer_payload(frame, detection)
         for viewer in viewers:
-            ok = await self._safe_send_json(viewer, viewer_payload)
+            ok = await self._safe_send_viewer_frame(viewer, frame, detection)
             if not ok:
                 await self.remove_viewer(viewer)
 
@@ -158,21 +156,33 @@ class StreamHub:
                 "detector": detector_status or {},
             }
 
-    async def latest_viewer_payload(self) -> dict[str, Any] | None:
+    async def send_latest_to_viewer(self, websocket: WebSocket) -> bool:
         async with self._lock:
             frame = self.latest_frame
             detection = self.latest_detection
         if frame is None or detection is None:
-            return None
-        return self._viewer_payload(frame, detection)
+            return True
+        return await self._safe_send_viewer_frame(websocket, frame, detection)
 
-    def _viewer_payload(self, frame: CameraFrame, detection: dict[str, Any]) -> dict[str, Any]:
+    def _viewer_metadata(self, frame: CameraFrame, detection: dict[str, Any]) -> dict[str, Any]:
         return {
             "type": "frame",
             "captured_at": frame.received_at,
-            "jpeg": "data:image/jpeg;base64," + base64.b64encode(frame.jpeg).decode("ascii"),
+            "transport": "binary",
+            "content_type": "image/jpeg",
+            "byte_length": len(frame.jpeg),
             "detection": detection,
         }
+
+    async def _safe_send_viewer_frame(
+        self, websocket: WebSocket, frame: CameraFrame, detection: dict[str, Any]
+    ) -> bool:
+        try:
+            await websocket.send_json(self._viewer_metadata(frame, detection))
+            await websocket.send_bytes(frame.jpeg)
+            return True
+        except Exception:
+            return False
 
     async def _safe_send_json(self, websocket: WebSocket, payload: dict[str, Any]) -> bool:
         try:

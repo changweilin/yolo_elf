@@ -118,9 +118,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await websocket.send_json(
             {"type": "status", "status": await hub.snapshot(detector.status())}
         )
-        latest = await hub.latest_viewer_payload()
-        if latest is not None:
-            await websocket.send_json(latest)
+        if not await hub.send_latest_to_viewer(websocket):
+            await hub.remove_viewer(websocket)
+            return
         try:
             while True:
                 await websocket.receive_text()

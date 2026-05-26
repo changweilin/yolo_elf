@@ -76,7 +76,7 @@ $env:YOLO_DEVICE = "0"
 | `GET /health` | 健康檢查 |
 | `GET /api/status` | 即時狀態、frame 計數、FPS、延遲與模型/GPU 狀態 |
 | `WS /ws/camera` | 手機上傳 JPEG 幀並接收偵測結果 |
-| `WS /ws/viewer` | viewer 接收 JPEG 幀與偵測結果 |
+| `WS /ws/viewer` | viewer 接收偵測 metadata 與 binary JPEG 幀 |
 
 偵測結果 payload：
 

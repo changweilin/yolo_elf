@@ -7,7 +7,7 @@
 | P0 | Validate runtime settings ranges | Done | Invalid env values fail fast with clear messages |
 | P0 | Expand `/api/status` stream metrics | Done | Status includes FPS, queue depth, frame size, and latency |
 | P1 | Keep README ports and operations docs aligned | Done | README examples use the active default port |
-| P1 | Reduce viewer frame transport overhead | Done | Base64 work is avoided when no viewer is connected |
+| P1 | Reduce viewer frame transport overhead | Done | Viewer frames use binary WebSocket payloads instead of base64 JSON |
 | P2 | Add detector warmup and precision controls | Done | Startup/warmup behavior and precision are configurable |
 | P2 | Add a repeatable benchmark script | Done | A script reports average and tail latency for sample frames |
 
@@ -36,3 +36,13 @@ Verification: `npm.cmd run test` passes with 19 tests. A minimal benchmark comma
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bench.ps1 -Frames 1 -Warmup 0 -Width 64 -Height 64 -ImgSize 32 -Device cpu
 ```
+
+## Third Execution Batch
+
+Completed: 2026-05-26
+
+1. Changed viewer streaming from base64-in-JSON to ordered metadata JSON plus binary JPEG messages.
+2. Updated the viewer client to pair metadata with the following binary frame and manage object URLs.
+3. Added an integration test for the viewer binary WebSocket protocol.
+
+Verification: `npm.cmd run test` passes with 20 tests. Pytest still reports the existing `.pytest_cache` permission warning, but the suite succeeds.

@@ -40,3 +40,30 @@ def test_camera_websocket_returns_detection_error_for_invalid_jpeg():
     detection = message["detection"]
     assert detection["boxes"] == []
     assert detection["error"]
+
+
+def test_viewer_receives_binary_frame_after_metadata():
+    app = create_app()
+    frame = b"not a jpeg"
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/viewer") as viewer:
+            status = viewer.receive_json()
+            assert status["type"] == "status"
+
+            with client.websocket_connect("/ws/camera") as camera:
+                config = camera.receive_json()
+                assert config["type"] == "config"
+                camera.send_bytes(frame)
+
+                camera_message = camera.receive_json()
+                viewer_metadata = viewer.receive_json()
+                viewer_frame = viewer.receive_bytes()
+
+    assert camera_message["type"] == "detection"
+    assert viewer_metadata["type"] == "frame"
+    assert viewer_metadata["transport"] == "binary"
+    assert viewer_metadata["content_type"] == "image/jpeg"
+    assert viewer_metadata["byte_length"] == len(frame)
+    assert "jpeg" not in viewer_metadata
+    assert viewer_frame == frame

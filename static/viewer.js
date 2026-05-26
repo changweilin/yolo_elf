@@ -13,6 +13,8 @@ const errorLine = document.querySelector("#errorLine");
 const state = {
   ws: null,
   latestDetection: null,
+  pendingFrame: null,
+  imageUrl: null,
   reconnectTimer: null,
 };
 
@@ -30,6 +32,7 @@ function setChip(element, text, tone) {
 function connectViewer() {
   setChip(viewerSocketStatus, "viewer 連線中", "warn");
   const ws = new WebSocket(socketUrl("/ws/viewer"));
+  ws.binaryType = "blob";
   state.ws = ws;
 
   ws.addEventListener("open", () => {
@@ -37,13 +40,14 @@ function connectViewer() {
   });
 
   ws.addEventListener("message", (event) => {
+    if (typeof event.data !== "string") {
+      renderFrameBytes(event.data);
+      return;
+    }
+
     const payload = JSON.parse(event.data);
     if (payload.type === "frame") {
-      state.latestDetection = payload.detection;
-      image.src = payload.jpeg;
-      emptyState.hidden = true;
-      renderMetrics(payload.detection);
-      renderError(payload.detection.error || "");
+      state.pendingFrame = payload;
       return;
     }
     if (payload.type === "status") {
@@ -55,6 +59,7 @@ function connectViewer() {
     if (state.ws === ws) {
       state.ws = null;
     }
+    state.pendingFrame = null;
     setChip(viewerSocketStatus, "viewer 中斷", "bad");
     state.reconnectTimer = setTimeout(connectViewer, 1200);
   });
@@ -62,6 +67,38 @@ function connectViewer() {
   ws.addEventListener("error", () => {
     setChip(viewerSocketStatus, "viewer 錯誤", "bad");
   });
+}
+
+function renderFrameBytes(data) {
+  const frame = state.pendingFrame;
+  if (!frame) {
+    return;
+  }
+  state.pendingFrame = null;
+
+  const blob =
+    data instanceof Blob
+      ? data
+      : new Blob([data], { type: frame.content_type || "image/jpeg" });
+  const nextUrl = URL.createObjectURL(blob);
+  const previousUrl = state.imageUrl;
+  state.imageUrl = nextUrl;
+  image.src = nextUrl;
+  if (previousUrl) {
+    URL.revokeObjectURL(previousUrl);
+  }
+
+  state.latestDetection = frame.detection;
+  emptyState.hidden = true;
+  renderMetrics(frame.detection);
+  renderError(frame.detection.error || "");
+}
+
+function releaseImageUrl() {
+  if (state.imageUrl) {
+    URL.revokeObjectURL(state.imageUrl);
+    state.imageUrl = null;
+  }
 }
 
 function renderStatus(status) {
@@ -173,6 +210,7 @@ image.addEventListener("load", () => {
 });
 
 window.addEventListener("resize", resizeOverlay);
+window.addEventListener("beforeunload", releaseImageUrl);
 connectViewer();
 pollStatus();
 requestAnimationFrame(drawOverlay);
