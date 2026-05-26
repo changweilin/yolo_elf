@@ -7,6 +7,9 @@ SETTINGS_ENV = [
     "PORT",
     "YOLO_MODEL",
     "YOLO_DEVICE",
+    "YOLO_HALF",
+    "YOLO_WARMUP",
+    "YOLO_WARMUP_RUNS",
     "CONF_THRESH",
     "IMG_SIZE",
     "FRAME_FPS",
@@ -25,12 +28,18 @@ def clear_settings_env(monkeypatch):
 def test_get_settings_accepts_valid_overrides(monkeypatch):
     clear_settings_env(monkeypatch)
     monkeypatch.setenv("PORT", "8767")
+    monkeypatch.setenv("YOLO_HALF", "true")
+    monkeypatch.setenv("YOLO_WARMUP", "1")
+    monkeypatch.setenv("YOLO_WARMUP_RUNS", "2")
     monkeypatch.setenv("FRAME_FPS", "30")
     monkeypatch.setenv("JPEG_QUALITY", "0.8")
 
     settings = get_settings()
 
     assert settings.port == 8767
+    assert settings.yolo_half is True
+    assert settings.yolo_warmup is True
+    assert settings.yolo_warmup_runs == 2
     assert settings.frame_fps == 30
     assert settings.jpeg_quality == 0.8
 
@@ -39,6 +48,9 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     ("name", "value"),
     [
         ("PORT", "70000"),
+        ("YOLO_HALF", "maybe"),
+        ("YOLO_WARMUP", "warm"),
+        ("YOLO_WARMUP_RUNS", "0"),
         ("CONF_THRESH", "1.5"),
         ("IMG_SIZE", "16"),
         ("FRAME_FPS", "0"),

@@ -41,6 +41,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         api.state.settings = resolved_settings
         api.state.detector = detector
         api.state.hub = hub
+        if resolved_settings.yolo_warmup:
+            await asyncio.to_thread(detector.warmup)
         worker = asyncio.create_task(detection_worker())
         try:
             yield

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,13 +44,26 @@ def detection_error_payload(frame_id: int, message: str) -> dict[str, Any]:
     }
 
 
+def device_supports_half(device: str | int | None) -> bool:
+    if isinstance(device, int):
+        return device >= 0
+    if device is None:
+        return False
+    normalized = str(device).strip().lower()
+    return normalized == "cuda" or normalized.startswith("cuda:") or normalized.isdigit()
+
+
 class YoloDetector:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._model: Any | None = None
         self._names: dict[int, str] = {}
         self._device: str | int | None = None
+        self._half_enabled = False
+        self._warmed_up = False
+        self._warmup_ms = 0.0
         self._load_error: str | None = None
+        self._last_warmup_error: str | None = None
 
     @property
     def loaded(self) -> bool:
@@ -72,11 +86,18 @@ class YoloDetector:
             "loaded": self.loaded,
             "device": self._device,
             "requested_device": self.settings.yolo_device,
+            "half": self._half_enabled,
+            "requested_half": self.settings.yolo_half,
+            "warmup_enabled": self.settings.yolo_warmup,
+            "warmup_runs": self.settings.yolo_warmup_runs,
+            "warmed_up": self._warmed_up,
+            "warmup_ms": self._warmup_ms,
             "conf_thresh": self.settings.conf_thresh,
             "img_size": self.settings.img_size,
             "cuda_available": cuda_available,
             "torch_version": torch_version,
             "last_load_error": self._load_error,
+            "last_warmup_error": self._last_warmup_error,
         }
 
     def detect(self, jpeg_bytes: bytes, frame_id: int) -> dict[str, Any]:
@@ -84,17 +105,8 @@ class YoloDetector:
         model = self._ensure_model()
 
         started = time.perf_counter()
-        kwargs: dict[str, Any] = {
-            "source": decoded.data,
-            "imgsz": self.settings.img_size,
-            "conf": self.settings.conf_thresh,
-            "verbose": False,
-        }
-        if self._device is not None:
-            kwargs["device"] = self._device
-
         try:
-            results = model.predict(**kwargs)
+            results = self._predict(model, decoded.data)
         except Exception as exc:
             raise DetectionError(f"YOLO inference failed: {exc}") from exc
 
@@ -107,6 +119,34 @@ class YoloDetector:
             "inference_ms": round(inference_ms, 2),
             "boxes": boxes,
         }
+
+    def warmup(self) -> dict[str, Any]:
+        if not self.settings.yolo_warmup:
+            return {"enabled": False, "ok": True, "warmup_ms": 0.0}
+
+        started = time.perf_counter()
+        try:
+            import numpy as np
+
+            model = self._ensure_model()
+            warmup_size = min(max(self.settings.img_size, 32), 1280)
+            source = np.zeros((warmup_size, warmup_size, 3), dtype=np.uint8)
+            for _ in range(self.settings.yolo_warmup_runs):
+                self._predict(model, source)
+            self._synchronize_device()
+        except Exception as exc:
+            self._last_warmup_error = f"YOLO warmup failed: {exc}"
+            return {
+                "enabled": True,
+                "ok": False,
+                "warmup_ms": round((time.perf_counter() - started) * 1000.0, 2),
+                "error": self._last_warmup_error,
+            }
+
+        self._warmed_up = True
+        self._warmup_ms = round((time.perf_counter() - started) * 1000.0, 2)
+        self._last_warmup_error = None
+        return {"enabled": True, "ok": True, "warmup_ms": self._warmup_ms}
 
     def _decode_jpeg(self, jpeg_bytes: bytes) -> DecodedImage:
         try:
@@ -143,6 +183,7 @@ class YoloDetector:
             self._device = None
         else:
             self._device = self.settings.yolo_device
+        self._half_enabled = self.settings.yolo_half and device_supports_half(self._device)
 
         try:
             self._model = YOLO(self.settings.yolo_model)
@@ -157,6 +198,41 @@ class YoloDetector:
 
         self._load_error = None
         return self._model
+
+    def _prediction_kwargs(self, source: Any) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "source": source,
+            "imgsz": self.settings.img_size,
+            "conf": self.settings.conf_thresh,
+            "verbose": False,
+        }
+        if self._device is not None:
+            kwargs["device"] = self._device
+        if self._half_enabled:
+            kwargs["half"] = True
+        return kwargs
+
+    def _predict(self, model: Any, source: Any) -> Any:
+        try:
+            import torch
+
+            context = torch.inference_mode()
+        except Exception:
+            context = nullcontext()
+
+        with context:
+            return model.predict(**self._prediction_kwargs(source))
+
+    def _synchronize_device(self) -> None:
+        if not device_supports_half(self._device):
+            return
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+        except Exception:
+            return
 
     def _extract_boxes(self, result: Any, width: int, height: int) -> list[dict[str, Any]]:
         extracted: list[dict[str, Any]] = []

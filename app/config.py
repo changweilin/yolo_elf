@@ -49,12 +49,27 @@ def _bounded_float_env(name: str, default: float, min_value: float, max_value: f
     return value
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean, got {raw!r}")
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str
     port: int
     yolo_model: str
     yolo_device: str
+    yolo_half: bool
+    yolo_warmup: bool
+    yolo_warmup_runs: int
     conf_thresh: float
     img_size: int
     frame_fps: int
@@ -71,6 +86,9 @@ def get_settings() -> Settings:
         port=_bounded_int_env("PORT", 8766, 1, 65535),
         yolo_model=os.getenv("YOLO_MODEL", "yolov8n.pt"),
         yolo_device=os.getenv("YOLO_DEVICE", "auto"),
+        yolo_half=_bool_env("YOLO_HALF", False),
+        yolo_warmup=_bool_env("YOLO_WARMUP", False),
+        yolo_warmup_runs=_bounded_int_env("YOLO_WARMUP_RUNS", 1, 1, 10),
         conf_thresh=_bounded_float_env("CONF_THRESH", 0.35, 0.0, 1.0),
         img_size=_bounded_int_env("IMG_SIZE", 640, 32, 4096),
         frame_fps=_bounded_int_env("FRAME_FPS", 10, 1, 60),

@@ -1,4 +1,4 @@
-from app.detector import clamp_xyxy, detection_error_payload
+from app.detector import clamp_xyxy, detection_error_payload, device_supports_half
 
 
 def test_clamp_xyxy_keeps_boxes_inside_image():
@@ -19,3 +19,12 @@ def test_detection_error_payload_has_output_shape():
         "boxes": [],
         "error": "bad frame",
     }
+
+
+def test_device_supports_half_only_for_cuda_targets():
+    assert device_supports_half(0) is True
+    assert device_supports_half("0") is True
+    assert device_supports_half("cuda") is True
+    assert device_supports_half("cuda:0") is True
+    assert device_supports_half("cpu") is False
+    assert device_supports_half(None) is False

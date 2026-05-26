@@ -25,6 +25,11 @@ try {
         exit $LASTEXITCODE
     }
 
+    & $PythonExe -m py_compile "scripts\bench_detector.py"
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
     $Node = Get-Command node -ErrorAction Stop
     $JavaScriptFiles = @(
         "static\phone.js",

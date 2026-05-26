@@ -46,6 +46,9 @@ https://<pc-tailnet-name>.<tailnet>.ts.net/phone
 | --- | --- | --- |
 | `YOLO_MODEL` | `yolov8n.pt` | 模型權重，可換成 `.pt` 或 `.onnx` 路徑 |
 | `YOLO_DEVICE` | `auto` | `auto` 會優先用 CUDA，或手動設 `cpu`、`0` |
+| `YOLO_HALF` | `0` | CUDA 推論時啟用 FP16/half precision |
+| `YOLO_WARMUP` | `0` | 啟動時預載模型並先跑 warmup |
+| `YOLO_WARMUP_RUNS` | `1` | warmup 推論次數 |
 | `CONF_THRESH` | `0.35` | 偵測信心門檻 |
 | `IMG_SIZE` | `640` | YOLO 推論尺寸 |
 | `FRAME_FPS` | `10` | 手機端預設傳送 FPS |
@@ -98,6 +101,13 @@ $env:YOLO_DEVICE = "0"
 
 ```powershell
 .\scripts\run-tests.ps1
+```
+
+## Benchmark
+
+```powershell
+.\scripts\bench.ps1 -Frames 30 -Warmup 3
+.\scripts\bench.ps1 -Frames 30 -Warmup 3 -Device 0 -Half
 ```
 
 ## 常見狀況

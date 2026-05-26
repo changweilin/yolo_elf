@@ -8,8 +8,8 @@
 | P0 | Expand `/api/status` stream metrics | Done | Status includes FPS, queue depth, frame size, and latency |
 | P1 | Keep README ports and operations docs aligned | Done | README examples use the active default port |
 | P1 | Reduce viewer frame transport overhead | Done | Base64 work is avoided when no viewer is connected |
-| P2 | Add detector warmup and precision controls | Pending | Startup/warmup behavior and precision are configurable |
-| P2 | Add a repeatable benchmark script | Pending | A script reports average and tail latency for sample frames |
+| P2 | Add detector warmup and precision controls | Done | Startup/warmup behavior and precision are configurable |
+| P2 | Add a repeatable benchmark script | Done | A script reports average and tail latency for sample frames |
 
 ## Current Execution Batch
 
@@ -21,3 +21,18 @@ Started: 2026-05-26
 4. Update the README examples to match the current `8766` default.
 
 Verification: `npm.cmd run test` passes with 15 tests. Pytest reports a cache-write permission warning for `.pytest_cache`, but the test suite succeeds.
+
+## Second Execution Batch
+
+Completed: 2026-05-26
+
+1. Added `YOLO_HALF`, `YOLO_WARMUP`, and `YOLO_WARMUP_RUNS` settings.
+2. Added detector status fields for half precision and warmup state.
+3. Added `scripts/bench.ps1` and `scripts/bench_detector.py` for repeatable latency checks.
+4. Added tests for boolean/range config parsing and half-precision device selection.
+
+Verification: `npm.cmd run test` passes with 19 tests. A minimal benchmark command also runs successfully on CPU:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bench.ps1 -Frames 1 -Warmup 0 -Width 64 -Height 64 -ImgSize 32 -Device cpu
+```
