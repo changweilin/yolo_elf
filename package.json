@@ -1,0 +1,15 @@
+{
+  "name": "yolo-elf",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run.ps1 -HostName 127.0.0.1 -Port 8765 -Reload",
+    "dev:lan": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run.ps1 -HostName 0.0.0.0 -Port 8765 -Reload",
+    "start": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run.ps1 -HostName 127.0.0.1 -Port 8765",
+    "start:lan": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run.ps1 -HostName 0.0.0.0 -Port 8765",
+    "start:bg": "node ./scripts/start-server.mjs 8765",
+    "start:bg:lan": "node ./scripts/start-server.mjs 8765 --host 0.0.0.0",
+    "tailscale": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/tailscale-serve.ps1 -Port 8765",
+    "test": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-tests.ps1"
+  }
+}

@@ -25,6 +25,14 @@ const state = {
   },
 };
 
+function isLocalHostname(hostname) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function cameraNeedsHttps() {
+  return !window.isSecureContext && !isLocalHostname(window.location.hostname);
+}
+
 function socketUrl(path) {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}${path}`;
@@ -39,6 +47,12 @@ function setChip(element, text, tone) {
 async function startCamera() {
   startButton.disabled = true;
   try {
+    if (cameraNeedsHttps()) {
+      throw new Error("Camera requires HTTPS. Use the Tailscale HTTPS URL for phone capture.");
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Camera API is not available in this browser context.");
+    }
     state.stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
@@ -272,3 +286,8 @@ function colorForClass(classId) {
 startButton.addEventListener("click", startCamera);
 stopButton.addEventListener("click", stopCamera);
 window.addEventListener("resize", resizeOverlay);
+
+if (cameraNeedsHttps()) {
+  setChip(cameraStatus, "需要 HTTPS", "bad");
+  setChip(detectStatus, "Use Tailscale HTTPS for camera", "bad");
+}
