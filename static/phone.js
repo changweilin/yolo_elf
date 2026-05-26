@@ -8,6 +8,12 @@ const qualityInput = document.querySelector("#qualityInput");
 const cameraStatus = document.querySelector("#cameraStatus");
 const socketStatus = document.querySelector("#socketStatus");
 const detectStatus = document.querySelector("#detectStatus");
+const adaptiveStatus = document.querySelector("#adaptiveStatus");
+
+const MAX_BUFFERED_BYTES = 2_000_000;
+const SOFT_BUFFERED_BYTES = 750_000;
+const SEND_WINDOW_MS = 3000;
+const INFERENCE_HEADROOM = 1.35;
 
 const state = {
   stream: null,
@@ -22,6 +28,14 @@ const state = {
     height: 540,
     fps: 10,
     jpegQuality: 0.65,
+  },
+  pacing: {
+    effectiveFps: 10,
+    sentFrames: 0,
+    skippedFrames: 0,
+    lastFrameBytes: 0,
+    sendTimes: [],
+    lastSkipReason: "",
   },
 };
 
@@ -100,11 +114,13 @@ function stopCamera() {
     state.stream = null;
   }
   state.latestDetection = null;
+  resetPacing();
   startButton.disabled = false;
   stopButton.disabled = true;
   setChip(cameraStatus, "相機待命", "warn");
   setChip(socketStatus, "連線待命", "warn");
   setChip(detectStatus, "尚無偵測", "warn");
+  setChip(adaptiveStatus, "adaptive idle", "warn");
   clearOverlay();
 }
 
@@ -140,6 +156,7 @@ function connectSocket() {
       } else {
         setChip(detectStatus, `${boxes} boxes / ${ms} ms`, "good");
       }
+      updateAdaptiveStatus();
       return;
     }
     if (payload.type === "error") {
@@ -175,8 +192,7 @@ function applyServerConfig(config) {
 }
 
 function scheduleCapture(delay = null) {
-  const fps = Math.max(1, Number(fpsInput.value || state.config.fps));
-  const nextDelay = delay ?? Math.round(1000 / fps);
+  const nextDelay = delay ?? captureIntervalMs();
   state.captureTimer = setTimeout(captureFrame, nextDelay);
 }
 
@@ -184,13 +200,8 @@ function captureFrame() {
   if (!state.stream) {
     return;
   }
-  if (
-    state.ws &&
-    state.ws.readyState === WebSocket.OPEN &&
-    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
-    state.ws.bufferedAmount < 2_000_000 &&
-    !state.sending
-  ) {
+  const skipReason = frameSkipReason();
+  if (!skipReason) {
     state.sending = true;
     capture.width = state.config.width;
     capture.height = state.config.height;
@@ -201,7 +212,12 @@ function captureFrame() {
       async (blob) => {
         try {
           if (blob && state.ws && state.ws.readyState === WebSocket.OPEN) {
-            state.ws.send(await blob.arrayBuffer());
+            const bytes = await blob.arrayBuffer();
+            state.ws.send(bytes);
+            markFrameSent(bytes.byteLength);
+          }
+          if (!blob) {
+            markFrameSkipped("encode");
           }
         } finally {
           state.sending = false;
@@ -210,8 +226,105 @@ function captureFrame() {
       "image/jpeg",
       quality,
     );
+  } else {
+    markFrameSkipped(skipReason);
   }
   scheduleCapture();
+}
+
+function requestedFps() {
+  const raw = Number(fpsInput.value || state.config.fps);
+  return Math.max(1, Math.min(60, Number.isFinite(raw) ? raw : state.config.fps));
+}
+
+function captureIntervalMs() {
+  const fps = adaptiveFps();
+  state.pacing.effectiveFps = fps;
+  return Math.max(16, Math.round(1000 / fps));
+}
+
+function adaptiveFps() {
+  const requested = requestedFps();
+  const inferenceMs = Number(state.latestDetection?.inference_ms || 0);
+  let effective = requested;
+
+  if (inferenceMs > 0) {
+    effective = Math.min(effective, 1000 / Math.max(16, inferenceMs * INFERENCE_HEADROOM));
+  }
+
+  const buffered = state.ws?.bufferedAmount ?? 0;
+  if (buffered >= MAX_BUFFERED_BYTES) {
+    effective = 1;
+  } else if (buffered >= SOFT_BUFFERED_BYTES) {
+    effective = Math.min(effective, Math.max(1, requested / 2));
+  }
+
+  return Math.max(1, Math.min(requested, effective));
+}
+
+function frameSkipReason() {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return "socket";
+  }
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    return "video";
+  }
+  if (state.ws.bufferedAmount >= MAX_BUFFERED_BYTES) {
+    return "buffer";
+  }
+  if (state.sending) {
+    return "encode";
+  }
+  return "";
+}
+
+function markFrameSent(byteLength) {
+  const now = performance.now();
+  state.pacing.sentFrames += 1;
+  state.pacing.lastFrameBytes = byteLength;
+  state.pacing.lastSkipReason = "";
+  state.pacing.sendTimes.push(now);
+  trimSendWindow(now);
+  updateAdaptiveStatus();
+}
+
+function markFrameSkipped(reason) {
+  state.pacing.skippedFrames += 1;
+  state.pacing.lastSkipReason = reason;
+  trimSendWindow(performance.now());
+  updateAdaptiveStatus();
+}
+
+function trimSendWindow(now) {
+  state.pacing.sendTimes = state.pacing.sendTimes.filter((sentAt) => now - sentAt <= SEND_WINDOW_MS);
+}
+
+function actualSendFps() {
+  const times = state.pacing.sendTimes;
+  if (times.length < 2) {
+    return times.length;
+  }
+  const elapsedSec = Math.max(0.001, (times[times.length - 1] - times[0]) / 1000);
+  return times.length / elapsedSec;
+}
+
+function updateAdaptiveStatus() {
+  const effective = state.pacing.effectiveFps || adaptiveFps();
+  const actual = actualSendFps();
+  const skipped = state.pacing.lastSkipReason;
+  const buffered = state.ws?.bufferedAmount ?? 0;
+  const tone = skipped || buffered >= SOFT_BUFFERED_BYTES ? "warn" : "good";
+  const suffix = skipped ? ` / ${skipped}` : "";
+  setChip(adaptiveStatus, `${actual.toFixed(1)} fps / cap ${effective.toFixed(1)}${suffix}`, tone);
+}
+
+function resetPacing() {
+  state.pacing.effectiveFps = state.config.fps;
+  state.pacing.sentFrames = 0;
+  state.pacing.skippedFrames = 0;
+  state.pacing.lastFrameBytes = 0;
+  state.pacing.sendTimes = [];
+  state.pacing.lastSkipReason = "";
 }
 
 function resizeOverlay() {

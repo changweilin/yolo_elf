@@ -57,6 +57,8 @@ https://<pc-tailnet-name>.<tailnet>.ts.net/phone
 | `JPEG_QUALITY` | `0.65` | 手機端 JPEG 品質 |
 | `MAX_FRAME_BYTES` | `5242880` | 單張幀大小上限 |
 
+手機端會把 `FRAME_FPS` 視為上限，並依最近推論時間與 WebSocket buffer 自動降低實際送出 FPS，避免後端 queue 持續丟幀。
+
 Ultralytics 設定會寫到專案內的 `.ultralytics` 目錄，避免 Windows 權限或 sandbox 阻擋 `%APPDATA%`。
 
 範例：使用自訂模型。

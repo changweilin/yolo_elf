@@ -8,6 +8,7 @@
 | P0 | Expand `/api/status` stream metrics | Done | Status includes FPS, queue depth, frame size, and latency |
 | P1 | Keep README ports and operations docs aligned | Done | README examples use the active default port |
 | P1 | Reduce viewer frame transport overhead | Done | Viewer frames use binary WebSocket payloads instead of base64 JSON |
+| P1 | Add adaptive phone capture pacing | Done | Phone send FPS responds to inference speed and WebSocket backpressure |
 | P2 | Add detector warmup and precision controls | Done | Startup/warmup behavior and precision are configurable |
 | P2 | Add a repeatable benchmark script | Done | A script reports average and tail latency for sample frames |
 
@@ -46,3 +47,23 @@ Completed: 2026-05-26
 3. Added an integration test for the viewer binary WebSocket protocol.
 
 Verification: `npm.cmd run test` passes with 20 tests. Pytest still reports the existing `.pytest_cache` permission warning, but the suite succeeds.
+
+## Fourth Execution Batch
+
+Completed: 2026-05-26
+
+1. Added adaptive phone pacing based on recent inference time and WebSocket buffered bytes.
+2. Added a phone HUD chip for actual send FPS and current adaptive cap.
+3. Documented that `FRAME_FPS` is now a maximum rather than a hard send rate.
+
+Verification: `npm.cmd run test` passes with 20 tests. Pytest still reports the existing `.pytest_cache` permission warning, but the suite succeeds.
+
+## On-Demand Execution Check
+
+Completed: 2026-05-26
+
+1. Rechecked the working tree and confirmed the outstanding changes are scoped to adaptive phone pacing and documentation.
+2. Re-ran the full test command successfully.
+3. Ran a minimal CPU benchmark to confirm the detector path still executes.
+
+Verification: `npm.cmd run test` passes with 20 tests. Minimal benchmark command succeeds with 1 CPU frame at 2400.52 ms.
