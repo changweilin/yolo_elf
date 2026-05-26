@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-tailscale serve --bg $Port
+tailscale serve --bg --https=$Port $Port
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

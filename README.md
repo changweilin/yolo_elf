@@ -33,7 +33,7 @@ node .\scripts\start-server.mjs 8767
 手機登入同一個 Tailscale tailnet 後，開：
 
 ```text
-https://<pc-tailnet-name>.<tailnet>.ts.net/phone
+https://<pc-tailnet-name>.<tailnet>.ts.net:8766/phone
 ```
 
 瀏覽器相機 API 需要安全來源；手機端請用 Tailscale Serve 提供的 HTTPS URL，不要用一般 HTTP tailnet IP。
@@ -143,7 +143,7 @@ Optional settings:
 
 ## 常見狀況
 
-- `tailscale status` 顯示 access denied：Windows 上 Tailscale LocalAPI 可能需要系統權限；Serve 仍可用 `tailscale serve --bg 8766` 設定，必要時用系統管理員 PowerShell 執行。
-- 手機沒有跳相機權限：確認 URL 是 `https://...ts.net/phone`，且手機瀏覽器允許相機。
+- `tailscale status` 顯示 access denied：Windows 上 Tailscale LocalAPI 可能需要系統權限；Serve 仍可用 `tailscale serve --bg --https=8766 8766` 設定，必要時用系統管理員 PowerShell 執行。
+- 手機沒有跳相機權限：確認 URL 是 `https://...ts.net:8766/phone`，且手機瀏覽器允許相機。
 - 第一次偵測很慢：Ultralytics 會下載 `yolov8n.pt` 並初始化 CUDA；第二次通常會快很多。
 - GPU 沒有被用到：在 `/api/status` 看 `cuda_available`，或重新執行 `.\scripts\setup.ps1 -Cuda`。
