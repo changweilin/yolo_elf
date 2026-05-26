@@ -71,20 +71,33 @@ class YoloDetector:
 
     def status(self) -> dict[str, Any]:
         cuda_available: bool | None
+        cuda_device_count: int | None
+        cuda_device_name: str | None
+        cuda_version: str | None
         torch_version: str | None
+        resolved_device: str | int | None
         try:
             import torch
 
             cuda_available = bool(torch.cuda.is_available())
+            cuda_device_count = int(torch.cuda.device_count()) if cuda_available else 0
+            cuda_device_name = torch.cuda.get_device_name(0) if cuda_available else None
+            cuda_version = str(torch.version.cuda)
             torch_version = str(torch.__version__)
+            resolved_device = self._device if self._device is not None else self._resolve_device(torch)
         except Exception:
             cuda_available = None
+            cuda_device_count = None
+            cuda_device_name = None
+            cuda_version = None
             torch_version = None
+            resolved_device = self._device
 
         return {
             "model": self.settings.yolo_model,
             "loaded": self.loaded,
             "device": self._device,
+            "resolved_device": resolved_device,
             "requested_device": self.settings.yolo_device,
             "half": self._half_enabled,
             "requested_half": self.settings.yolo_half,
@@ -95,6 +108,9 @@ class YoloDetector:
             "conf_thresh": self.settings.conf_thresh,
             "img_size": self.settings.img_size,
             "cuda_available": cuda_available,
+            "cuda_device_count": cuda_device_count,
+            "cuda_device_name": cuda_device_name,
+            "cuda_version": cuda_version,
             "torch_version": torch_version,
             "last_load_error": self._load_error,
             "last_warmup_error": self._last_warmup_error,
@@ -176,13 +192,7 @@ class YoloDetector:
             self._load_error = f"YOLO dependencies are not installed: {exc}"
             raise DetectionError(self._load_error) from exc
 
-        requested_device = self.settings.yolo_device.strip().lower()
-        if requested_device == "auto":
-            self._device = 0 if torch.cuda.is_available() else "cpu"
-        elif requested_device in {"", "none"}:
-            self._device = None
-        else:
-            self._device = self.settings.yolo_device
+        self._device = self._resolve_device(torch)
         self._half_enabled = self.settings.yolo_half and device_supports_half(self._device)
 
         try:
@@ -198,6 +208,14 @@ class YoloDetector:
 
         self._load_error = None
         return self._model
+
+    def _resolve_device(self, torch_module: Any) -> str | int | None:
+        requested_device = self.settings.yolo_device.strip().lower()
+        if requested_device == "auto":
+            return 0 if torch_module.cuda.is_available() else "cpu"
+        if requested_device in {"", "none"}:
+            return None
+        return self.settings.yolo_device
 
     def _prediction_kwargs(self, source: Any) -> dict[str, Any]:
         kwargs: dict[str, Any] = {

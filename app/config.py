@@ -95,12 +95,12 @@ def get_settings() -> Settings:
         yolo_half=_bool_env("YOLO_HALF", False),
         yolo_warmup=_bool_env("YOLO_WARMUP", False),
         yolo_warmup_runs=_bounded_int_env("YOLO_WARMUP_RUNS", 1, 1, 10),
-        conf_thresh=_bounded_float_env("CONF_THRESH", 0.35, 0.0, 1.0),
-        img_size=_bounded_int_env("IMG_SIZE", 640, 32, 4096),
+        conf_thresh=_bounded_float_env("CONF_THRESH", 0.25, 0.0, 1.0),
+        img_size=_bounded_int_env("IMG_SIZE", 960, 32, 4096),
         frame_fps=_bounded_int_env("FRAME_FPS", 10, 1, 60),
-        capture_width=_bounded_int_env("CAPTURE_WIDTH", 960, 64, 4096),
-        capture_height=_bounded_int_env("CAPTURE_HEIGHT", 540, 64, 4096),
-        jpeg_quality=_bounded_float_env("JPEG_QUALITY", 0.65, 0.3, 0.95),
+        capture_width=_bounded_int_env("CAPTURE_WIDTH", 1280, 64, 4096),
+        capture_height=_bounded_int_env("CAPTURE_HEIGHT", 720, 64, 4096),
+        jpeg_quality=_bounded_float_env("JPEG_QUALITY", 0.85, 0.3, 0.95),
         max_frame_bytes=_bounded_int_env(
             "MAX_FRAME_BYTES", 5 * 1024 * 1024, 64 * 1024, 50 * 1024 * 1024
         ),

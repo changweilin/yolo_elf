@@ -25,10 +25,10 @@ const state = {
   drawing: false,
   sending: false,
   config: {
-    width: 960,
-    height: 540,
+    width: 1280,
+    height: 720,
     fps: 10,
-    jpegQuality: 0.65,
+    jpegQuality: 0.85,
   },
   pacing: {
     effectiveFps: 10,
@@ -221,7 +221,7 @@ function captureFrame() {
     capture.height = state.config.height;
     const ctx = capture.getContext("2d", { alpha: false });
     ctx.drawImage(video, 0, 0, capture.width, capture.height);
-    const quality = Math.max(0.3, Math.min(0.95, Number(qualityInput.value || 0.65)));
+    const quality = Math.max(0.3, Math.min(0.95, Number(qualityInput.value || 0.85)));
     capture.toBlob(
       async (blob) => {
         try {
