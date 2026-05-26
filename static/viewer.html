@@ -11,30 +11,30 @@
   <body>
     <main class="viewer-shell">
       <section class="viewer-stage" aria-label="detected stream">
-        <img id="viewerImage" alt="" />
+        <img id="viewerImage" alt="Detection preview" />
         <canvas id="viewerOverlay"></canvas>
-        <div id="emptyState" class="empty-state">等待手機影像</div>
+        <div id="emptyState" class="empty-state">Waiting for frames</div>
       </section>
 
       <header class="hud topbar">
         <div class="brand"><img src="/static/logo.svg" alt="YOLO Elf" /></div>
         <div class="topbar-actions">
           <div class="status-row">
-            <span id="viewerSocketStatus" class="chip warn">viewer 待命</span>
-            <span id="cameraLinkStatus" class="chip warn">phone 離線</span>
-            <span id="modelStatus" class="chip warn">model 待載入</span>
+            <span id="viewerSocketStatus" class="chip warn">viewer idle</span>
+            <span id="cameraLinkStatus" class="chip warn">phone idle</span>
+            <span id="modelStatus" class="chip warn">model idle</span>
           </div>
-          <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換亮色模式" title="切換亮色模式">
-            <span data-theme-icon aria-hidden="true">☾</span>
+          <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme" title="Toggle theme">
+            <span data-theme-icon aria-hidden="true">D</span>
           </button>
         </div>
       </header>
 
       <aside class="viewer-panel">
         <div class="panel-header">
-          <span class="panel-title">偵測狀態</span>
+          <span class="panel-title">Stream metrics</span>
           <a href="/phone" target="_blank" rel="noreferrer">
-            <button type="button">開啟手機相機</button>
+            <button type="button">Open phone</button>
           </a>
         </div>
         <div class="metric-grid">

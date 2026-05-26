@@ -46,7 +46,7 @@ def test_phone_page_exposes_camera_start_action():
         response = client.get("/phone")
 
     assert response.status_code == 200
-    assert "開啟相機" in response.text
+    assert "Start camera" in response.text
     assert "data-start-camera" in response.text
 
 
@@ -57,7 +57,7 @@ def test_viewer_links_to_phone_camera_page():
 
     assert response.status_code == 200
     assert 'href="/phone"' in response.text
-    assert "開啟手機相機" in response.text
+    assert "Open phone" in response.text
 
 
 def test_status_includes_stream_metrics():

@@ -1,6 +1,8 @@
 (() => {
   const storageKey = "yolo-elf-theme";
-  const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
+  const systemThemeQuery = window.matchMedia
+    ? window.matchMedia("(prefers-color-scheme: light)")
+    : { matches: false, addEventListener: () => {} };
   let savedTheme = readSavedTheme();
 
   function readSavedTheme() {
@@ -36,17 +38,20 @@
 
   function updateToggleButtons(theme) {
     const nextTheme = theme === "dark" ? "light" : "dark";
-    const currentLabel = theme === "dark" ? "深色模式" : "亮色模式";
-    const nextLabel = nextTheme === "dark" ? "深色模式" : "亮色模式";
+    const currentLabel = theme === "dark" ? "dark theme" : "light theme";
+    const nextLabel = nextTheme === "dark" ? "dark theme" : "light theme";
 
     for (const button of document.querySelectorAll("[data-theme-toggle]")) {
-      button.setAttribute("aria-label", `${currentLabel}，切換${nextLabel}`);
+      button.setAttribute(
+        "aria-label",
+        `Current ${currentLabel}. Switch to ${nextLabel}.`,
+      );
       button.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
-      button.title = `切換${nextLabel}`;
+      button.title = `Switch to ${nextLabel}`;
 
       const icon = button.querySelector("[data-theme-icon]");
       if (icon) {
-        icon.textContent = theme === "dark" ? "☾" : "☀";
+        icon.textContent = theme === "dark" ? "L" : "D";
       }
     }
   }

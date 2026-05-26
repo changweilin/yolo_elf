@@ -34,6 +34,8 @@ try {
     $JavaScriptFiles = @(
         "static\phone.js",
         "static\viewer.js",
+        "static\theme.js",
+        "scripts\build-static.mjs",
         "scripts\start-server.mjs"
     )
     foreach ($File in $JavaScriptFiles) {

@@ -1,4 +1,5 @@
 const video = document.querySelector("#cameraVideo");
+const demoFrame = document.querySelector("#demoFrame");
 const overlay = document.querySelector("#overlayCanvas");
 const capture = document.querySelector("#captureCanvas");
 const cameraIdle = document.querySelector("#cameraIdle");
@@ -11,10 +12,26 @@ const socketStatus = document.querySelector("#socketStatus");
 const detectStatus = document.querySelector("#detectStatus");
 const adaptiveStatus = document.querySelector("#adaptiveStatus");
 
+const moduleUrl = new URL(import.meta.url);
+const demoMode =
+  window.YOLO_ELF_DEMO_MODE === true || moduleUrl.searchParams.get("demo") === "1";
+
 const MAX_BUFFERED_BYTES = 2_000_000;
 const SOFT_BUFFERED_BYTES = 750_000;
 const SEND_WINDOW_MS = 3000;
 const INFERENCE_HEADROOM = 1.35;
+
+const demoDetection = {
+  frame_id: 42,
+  width: 1280,
+  height: 720,
+  inference_ms: 18.6,
+  boxes: [
+    { xyxy: [124, 137, 392, 535], class_id: 0, label: "monitor", confidence: 0.88 },
+    { xyxy: [489, 302, 633, 514], class_id: 1, label: "bottle", confidence: 0.76 },
+    { xyxy: [759, 219, 1062, 521], class_id: 2, label: "package", confidence: 0.93 },
+  ],
+};
 
 const state = {
   stream: null,
@@ -69,7 +86,34 @@ function setIdleVisible(visible) {
   cameraIdle.hidden = !visible;
 }
 
+function initializeDemoMode() {
+  if (demoFrame) {
+    demoFrame.hidden = false;
+  }
+  video.hidden = true;
+  state.latestDetection = demoDetection;
+  setStartButtonsDisabled(true);
+  stopButton.disabled = true;
+  fpsInput.disabled = true;
+  qualityInput.disabled = true;
+  setIdleVisible(false);
+  setChip(cameraStatus, "camera frozen", "warn");
+  setChip(socketStatus, "socket offline", "warn");
+  setChip(detectStatus, "demo boxes", "good");
+  setChip(adaptiveStatus, "privacy mode", "warn");
+  resizeOverlay();
+  if (!state.drawing) {
+    state.drawing = true;
+    requestAnimationFrame(drawOverlay);
+  }
+}
+
 async function startCamera() {
+  if (demoMode) {
+    initializeDemoMode();
+    return;
+  }
+
   setStartButtonsDisabled(true);
   setIdleVisible(false);
   try {
@@ -90,7 +134,7 @@ async function startCamera() {
     });
     video.srcObject = state.stream;
     await video.play();
-    setChip(cameraStatus, "相機上線", "good");
+    setChip(cameraStatus, "camera connected", "good");
     stopButton.disabled = false;
     connectSocket();
     resizeOverlay();
@@ -102,12 +146,17 @@ async function startCamera() {
   } catch (error) {
     setStartButtonsDisabled(false);
     setIdleVisible(true);
-    setChip(cameraStatus, `相機失敗`, "bad");
+    setChip(cameraStatus, "camera error", "bad");
     setChip(detectStatus, error.message || String(error), "bad");
   }
 }
 
 function stopCamera() {
+  if (demoMode) {
+    initializeDemoMode();
+    return;
+  }
+
   if (state.captureTimer) {
     clearTimeout(state.captureTimer);
     state.captureTimer = null;
@@ -131,9 +180,9 @@ function stopCamera() {
   setStartButtonsDisabled(false);
   setIdleVisible(true);
   stopButton.disabled = true;
-  setChip(cameraStatus, "相機待命", "warn");
-  setChip(socketStatus, "連線待命", "warn");
-  setChip(detectStatus, "尚無偵測", "warn");
+  setChip(cameraStatus, "camera idle", "warn");
+  setChip(socketStatus, "socket idle", "warn");
+  setChip(detectStatus, "detection idle", "warn");
   setChip(adaptiveStatus, "adaptive idle", "warn");
   clearOverlay();
 }
@@ -146,13 +195,13 @@ function connectSocket() {
     return;
   }
 
-  setChip(socketStatus, "連線中", "warn");
+  setChip(socketStatus, "socket connecting", "warn");
   const ws = new WebSocket(socketUrl("/ws/camera"));
   ws.binaryType = "arraybuffer";
   state.ws = ws;
 
   ws.addEventListener("open", () => {
-    setChip(socketStatus, "已連線", "good");
+    setChip(socketStatus, "socket connected", "good");
   });
 
   ws.addEventListener("message", (event) => {
@@ -166,7 +215,7 @@ function connectSocket() {
       const boxes = payload.detection.boxes?.length ?? 0;
       const ms = payload.detection.inference_ms ?? 0;
       if (payload.detection.error) {
-        setChip(detectStatus, "偵測錯誤", "bad");
+        setChip(detectStatus, "detection error", "bad");
       } else {
         setChip(detectStatus, `${boxes} boxes / ${ms} ms`, "good");
       }
@@ -182,14 +231,14 @@ function connectSocket() {
     if (state.ws === ws) {
       state.ws = null;
     }
-    setChip(socketStatus, "連線中斷", "bad");
+    setChip(socketStatus, "socket offline", "bad");
     if (state.stream) {
       state.reconnectTimer = setTimeout(connectSocket, 1200);
     }
   });
 
   ws.addEventListener("error", () => {
-    setChip(socketStatus, "連線錯誤", "bad");
+    setChip(socketStatus, "socket error", "bad");
   });
 }
 
@@ -416,7 +465,9 @@ for (const button of startButtons) {
 stopButton.addEventListener("click", stopCamera);
 window.addEventListener("resize", resizeOverlay);
 
-if (cameraNeedsHttps()) {
-  setChip(cameraStatus, "需要 HTTPS", "bad");
-  setChip(detectStatus, "Use Tailscale HTTPS for camera", "bad");
+if (demoMode) {
+  initializeDemoMode();
+} else if (cameraNeedsHttps()) {
+  setChip(cameraStatus, "needs HTTPS", "bad");
+  setChip(detectStatus, "Use the HTTPS phone URL", "bad");
 }

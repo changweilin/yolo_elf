@@ -11,6 +11,8 @@
     "start:lan": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run.ps1 -HostName 0.0.0.0 -Port 8766",
     "start:bg": "node ./scripts/start-server.mjs 8766 --host 0.0.0.0",
     "start:bg:lan": "node ./scripts/start-server.mjs 8766 --host 0.0.0.0",
+    "build": "node ./scripts/build-static.mjs",
+    "build:github-pages": "node ./scripts/build-static.mjs",
     "tailscale": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/tailscale-serve.ps1 -Port 8766",
     "bench": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/bench.ps1",
     "test": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-tests.ps1"

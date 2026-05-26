@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">YOLO Elf static demo frame</title>
+  <desc id="desc">Privacy-safe synthetic frame with abstract office objects for object detection boxes.</desc>
+  <rect width="1280" height="720" fill="#101315"/>
+  <rect x="0" y="430" width="1280" height="290" fill="#171c1b"/>
+  <path d="M0 430h1280" stroke="#2e3836" stroke-width="4"/>
+  <g opacity="0.55" stroke="#273230" stroke-width="2">
+    <path d="M120 0v720M280 0v720M440 0v720M600 0v720M760 0v720M920 0v720M1080 0v720"/>
+    <path d="M0 120h1280M0 240h1280M0 360h1280M0 480h1280M0 600h1280"/>
+  </g>
+  <rect x="106" y="132" width="304" height="266" rx="18" fill="#253033" stroke="#64c7ff" stroke-opacity="0.45" stroke-width="5"/>
+  <rect x="135" y="162" width="246" height="174" rx="12" fill="#151a1d"/>
+  <rect x="206" y="410" width="106" height="88" rx="10" fill="#20282a"/>
+  <rect x="158" y="505" width="202" height="30" rx="15" fill="#303a3b"/>
+  <rect x="475" y="308" width="160" height="210" rx="22" fill="#2c5246" stroke="#48d597" stroke-opacity="0.45" stroke-width="5"/>
+  <rect x="510" y="258" width="90" height="66" rx="24" fill="#3d7464"/>
+  <path d="M509 374h91M506 432h96" stroke="#6fe0af" stroke-opacity="0.52" stroke-width="8" stroke-linecap="round"/>
+  <rect x="742" y="220" width="334" height="302" rx="24" fill="#594a2c" stroke="#f0bd49" stroke-opacity="0.45" stroke-width="5"/>
+  <path d="M742 326h334M908 220v302" stroke="#7a6740" stroke-width="8"/>
+  <path d="M807 276h74M948 276h62M804 392h76M946 392h75" stroke="#b79a58" stroke-width="10" stroke-linecap="round"/>
+  <rect x="76" y="590" width="1128" height="52" rx="26" fill="#0c0f10" opacity="0.74"/>
+  <text x="80" y="90" fill="#f7f6f0" font-family="Inter, Segoe UI, sans-serif" font-size="32" font-weight="800">YOLO Elf static demo</text>
+  <text x="80" y="128" fill="#bbb6a8" font-family="Inter, Segoe UI, sans-serif" font-size="20">Camera, live frames, and uploads are frozen.</text>
+</svg>

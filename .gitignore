@@ -2,6 +2,7 @@
 __pycache__/
 .pytest_cache/
 .ultralytics/
+dist/
 *.pyc
 *.pyo
 *.pyd

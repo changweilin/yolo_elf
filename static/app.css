@@ -157,12 +157,18 @@ input {
 }
 
 #cameraVideo,
-#viewerImage {
+#viewerImage,
+#demoFrame {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+#cameraVideo[hidden],
+#demoFrame[hidden] {
+  display: none;
 }
 
 #overlayCanvas,
@@ -385,6 +391,10 @@ input {
   padding: 32px;
   text-align: center;
   color: var(--muted);
+}
+
+.empty-state[hidden] {
+  display: none;
 }
 
 .error-line {

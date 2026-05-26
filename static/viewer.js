@@ -10,6 +10,23 @@ const inferenceMetric = document.querySelector("#inferenceMetric");
 const droppedMetric = document.querySelector("#droppedMetric");
 const errorLine = document.querySelector("#errorLine");
 
+const moduleUrl = new URL(import.meta.url);
+const demoMode =
+  window.YOLO_ELF_DEMO_MODE === true || moduleUrl.searchParams.get("demo") === "1";
+
+const demoDetection = {
+  frame_id: 42,
+  width: 1280,
+  height: 720,
+  inference_ms: 18.6,
+  boxes: [
+    { xyxy: [124, 137, 392, 535], class_id: 0, label: "monitor", confidence: 0.88 },
+    { xyxy: [489, 302, 633, 514], class_id: 1, label: "bottle", confidence: 0.76 },
+    { xyxy: [759, 219, 1062, 521], class_id: 2, label: "package", confidence: 0.93 },
+  ],
+  error: "",
+};
+
 const state = {
   ws: null,
   latestDetection: null,
@@ -17,6 +34,10 @@ const state = {
   imageUrl: null,
   reconnectTimer: null,
 };
+
+function staticAsset(name) {
+  return new URL(name, import.meta.url).href;
+}
 
 function socketUrl(path) {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -30,13 +51,18 @@ function setChip(element, text, tone) {
 }
 
 function connectViewer() {
-  setChip(viewerSocketStatus, "viewer 連線中", "warn");
+  if (demoMode) {
+    renderDemoViewer();
+    return;
+  }
+
+  setChip(viewerSocketStatus, "viewer connecting", "warn");
   const ws = new WebSocket(socketUrl("/ws/viewer"));
   ws.binaryType = "blob";
   state.ws = ws;
 
   ws.addEventListener("open", () => {
-    setChip(viewerSocketStatus, "viewer 已連線", "good");
+    setChip(viewerSocketStatus, "viewer connected", "good");
   });
 
   ws.addEventListener("message", (event) => {
@@ -60,13 +86,25 @@ function connectViewer() {
       state.ws = null;
     }
     state.pendingFrame = null;
-    setChip(viewerSocketStatus, "viewer 中斷", "bad");
+    setChip(viewerSocketStatus, "viewer offline", "bad");
     state.reconnectTimer = setTimeout(connectViewer, 1200);
   });
 
   ws.addEventListener("error", () => {
-    setChip(viewerSocketStatus, "viewer 錯誤", "bad");
+    setChip(viewerSocketStatus, "viewer error", "bad");
   });
+}
+
+function renderDemoViewer() {
+  setChip(viewerSocketStatus, "viewer demo", "warn");
+  setChip(cameraLinkStatus, "phone frozen", "warn");
+  setChip(modelStatus, "demo snapshot", "warn");
+  droppedMetric.textContent = "0";
+  state.latestDetection = demoDetection;
+  image.src = staticAsset("demo-frame.svg");
+  emptyState.hidden = true;
+  renderMetrics(demoDetection);
+  renderError("");
 }
 
 function renderFrameBytes(data) {
@@ -102,9 +140,13 @@ function releaseImageUrl() {
 }
 
 function renderStatus(status) {
-  setChip(cameraLinkStatus, status.camera_connected ? "phone 上線" : "phone 離線", status.camera_connected ? "good" : "warn");
+  setChip(
+    cameraLinkStatus,
+    status.camera_connected ? "phone connected" : "phone idle",
+    status.camera_connected ? "good" : "warn",
+  );
   const detector = status.detector || {};
-  const modelText = detector.loaded ? detector.model : "model 待載入";
+  const modelText = detector.loaded ? detector.model : "model not loaded";
   setChip(modelStatus, modelText, detector.last_load_error ? "bad" : detector.loaded ? "good" : "warn");
   droppedMetric.textContent = String(status.frames_dropped ?? "-");
   if (status.last_error) {
@@ -193,13 +235,17 @@ function colorForClass(classId) {
 }
 
 async function pollStatus() {
+  if (demoMode) {
+    return;
+  }
+
   try {
     const response = await fetch("/api/status", { cache: "no-store" });
     if (response.ok) {
       renderStatus(await response.json());
     }
   } catch {
-    setChip(cameraLinkStatus, "status 失敗", "bad");
+    setChip(cameraLinkStatus, "status unavailable", "bad");
   } finally {
     setTimeout(pollStatus, 1000);
   }
