@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -21,6 +22,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def detection_worker() -> None:
         while True:
             frame: CameraFrame = await hub.frame_queue.get()
+            processing_started_at = time.time()
             try:
                 detection = await asyncio.to_thread(detector.detect, frame.jpeg, frame.frame_id)
             except DetectionError as exc:
@@ -32,7 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             finally:
                 hub.frame_queue.task_done()
 
-            await hub.publish_detection(frame, detection)
+            await hub.publish_detection(frame, detection, processing_started_at)
 
     @asynccontextmanager
     async def lifespan(api: FastAPI):

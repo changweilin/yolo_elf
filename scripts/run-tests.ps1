@@ -24,6 +24,19 @@ try {
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+
+    $Node = Get-Command node -ErrorAction Stop
+    $JavaScriptFiles = @(
+        "static\phone.js",
+        "static\viewer.js",
+        "scripts\start-server.mjs"
+    )
+    foreach ($File in $JavaScriptFiles) {
+        & $Node.Source --check $File
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
+    }
 }
 finally {
     Pop-Location

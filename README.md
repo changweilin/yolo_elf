@@ -15,19 +15,19 @@
 開電腦端 viewer：
 
 ```text
-http://127.0.0.1:8000/viewer
+http://127.0.0.1:8766/viewer
 ```
 
-若 `8000` 已被占用，可改用 Node 背景啟動器：
+若 `8766` 已被占用，可改用 Node 背景啟動器：
 
 ```powershell
-node .\scripts\start-server.mjs 8765
+node .\scripts\start-server.mjs 8767
 ```
 
 把服務放到 tailnet：
 
 ```powershell
-.\scripts\tailscale-serve.ps1 -Port 8000
+.\scripts\tailscale-serve.ps1 -Port 8766
 ```
 
 手機登入同一個 Tailscale tailnet 後，開：
@@ -71,7 +71,7 @@ $env:YOLO_DEVICE = "0"
 | `GET /phone` | 手機相機串流頁 |
 | `GET /viewer` | 電腦端偵測結果 overlay |
 | `GET /health` | 健康檢查 |
-| `GET /api/status` | 即時狀態、frame 計數、模型/GPU 狀態 |
+| `GET /api/status` | 即時狀態、frame 計數、FPS、延遲與模型/GPU 狀態 |
 | `WS /ws/camera` | 手機上傳 JPEG 幀並接收偵測結果 |
 | `WS /ws/viewer` | viewer 接收 JPEG 幀與偵測結果 |
 
@@ -102,7 +102,7 @@ $env:YOLO_DEVICE = "0"
 
 ## 常見狀況
 
-- `tailscale status` 顯示 access denied：Windows 上 Tailscale LocalAPI 可能需要系統權限；Serve 仍可用 `tailscale serve --bg 8000` 設定，必要時用系統管理員 PowerShell 執行。
+- `tailscale status` 顯示 access denied：Windows 上 Tailscale LocalAPI 可能需要系統權限；Serve 仍可用 `tailscale serve --bg 8766` 設定，必要時用系統管理員 PowerShell 執行。
 - 手機沒有跳相機權限：確認 URL 是 `https://...ts.net/phone`，且手機瀏覽器允許相機。
 - 第一次偵測很慢：Ultralytics 會下載 `yolov8n.pt` 並初始化 CUDA；第二次通常會快很多。
 - GPU 沒有被用到：在 `/api/status` 看 `cuda_available`，或重新執行 `.\scripts\setup.ps1 -Cuda`。

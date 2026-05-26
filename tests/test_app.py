@@ -15,6 +15,18 @@ def test_health_and_pages_load():
         assert client.get("/viewer").status_code == 200
 
 
+def test_status_includes_stream_metrics():
+    app = create_app()
+    with TestClient(app) as client:
+        status = client.get("/api/status").json()
+
+    assert status["queue_depth"] == 0
+    assert status["receive_fps"] == 0.0
+    assert status["process_fps"] == 0.0
+    assert status["last_frame_bytes"] == 0
+    assert status["avg_total_latency_ms"] == 0.0
+
+
 def test_camera_websocket_returns_detection_error_for_invalid_jpeg():
     app = create_app()
     with TestClient(app) as client:
