@@ -15,6 +15,26 @@ def test_health_and_pages_load():
         assert client.get("/viewer").status_code == 200
 
 
+def test_phone_page_exposes_camera_start_action():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/phone")
+
+    assert response.status_code == 200
+    assert "開啟相機" in response.text
+    assert "data-start-camera" in response.text
+
+
+def test_viewer_links_to_phone_camera_page():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'href="/phone"' in response.text
+    assert "開啟手機相機" in response.text
+
+
 def test_status_includes_stream_metrics():
     app = create_app()
     with TestClient(app) as client:

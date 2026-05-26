@@ -14,6 +14,12 @@
         <canvas id="overlayCanvas"></canvas>
       </section>
 
+      <section id="cameraIdle" class="camera-idle" aria-label="camera start">
+        <button class="primary camera-start" type="button" data-start-camera>
+          開啟相機
+        </button>
+      </section>
+
       <header class="hud topbar">
         <div class="brand"><img src="/static/logo.svg" alt="YOLO Elf" /></div>
         <div class="status-row">
@@ -25,8 +31,10 @@
       </header>
 
       <section class="hud controls">
-        <button id="startButton" class="primary" type="button">▶ 啟動</button>
-        <button id="stopButton" type="button" disabled>■ 停止</button>
+        <button id="startButton" class="primary" type="button" data-start-camera>
+          開啟相機
+        </button>
+        <button id="stopButton" type="button" disabled>停止相機</button>
         <label class="control-field" for="fpsInput">
           FPS
           <input id="fpsInput" type="number" min="1" max="30" step="1" value="10" />

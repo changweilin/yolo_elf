@@ -1,7 +1,8 @@
 const video = document.querySelector("#cameraVideo");
 const overlay = document.querySelector("#overlayCanvas");
 const capture = document.querySelector("#captureCanvas");
-const startButton = document.querySelector("#startButton");
+const cameraIdle = document.querySelector("#cameraIdle");
+const startButtons = Array.from(document.querySelectorAll("[data-start-camera]"));
 const stopButton = document.querySelector("#stopButton");
 const fpsInput = document.querySelector("#fpsInput");
 const qualityInput = document.querySelector("#qualityInput");
@@ -58,8 +59,19 @@ function setChip(element, text, tone) {
   element.classList.add(tone);
 }
 
+function setStartButtonsDisabled(disabled) {
+  for (const button of startButtons) {
+    button.disabled = disabled;
+  }
+}
+
+function setIdleVisible(visible) {
+  cameraIdle.hidden = !visible;
+}
+
 async function startCamera() {
-  startButton.disabled = true;
+  setStartButtonsDisabled(true);
+  setIdleVisible(false);
   try {
     if (cameraNeedsHttps()) {
       throw new Error("Camera requires HTTPS. Use the Tailscale HTTPS URL for phone capture.");
@@ -88,7 +100,8 @@ async function startCamera() {
     }
     scheduleCapture(0);
   } catch (error) {
-    startButton.disabled = false;
+    setStartButtonsDisabled(false);
+    setIdleVisible(true);
     setChip(cameraStatus, `相機失敗`, "bad");
     setChip(detectStatus, error.message || String(error), "bad");
   }
@@ -115,7 +128,8 @@ function stopCamera() {
   }
   state.latestDetection = null;
   resetPacing();
-  startButton.disabled = false;
+  setStartButtonsDisabled(false);
+  setIdleVisible(true);
   stopButton.disabled = true;
   setChip(cameraStatus, "相機待命", "warn");
   setChip(socketStatus, "連線待命", "warn");
@@ -396,7 +410,9 @@ function colorForClass(classId) {
   return colors[Math.abs(Number(classId || 0)) % colors.length];
 }
 
-startButton.addEventListener("click", startCamera);
+for (const button of startButtons) {
+  button.addEventListener("click", startCamera);
+}
 stopButton.addEventListener("click", stopCamera);
 window.addEventListener("resize", resizeOverlay);
 

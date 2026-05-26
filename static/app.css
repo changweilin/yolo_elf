@@ -75,7 +75,15 @@ input {
   position: relative;
   width: 100vw;
   height: 100vh;
+  min-height: 100svh;
   overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+  .camera-shell,
+  .viewer-shell {
+    height: 100dvh;
+  }
 }
 
 .camera-stage,
@@ -114,15 +122,40 @@ input {
 }
 
 .topbar {
-  left: 16px;
-  right: 16px;
-  top: 16px;
+  left: calc(16px + env(safe-area-inset-left));
+  right: calc(16px + env(safe-area-inset-right));
+  top: calc(16px + env(safe-area-inset-top));
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   min-height: 56px;
   padding: 10px 12px;
+}
+
+.camera-idle {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 96px 24px 144px;
+  background: rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+
+.camera-idle[hidden] {
+  display: none;
+}
+
+.camera-start {
+  min-width: min(280px, 82vw);
+  min-height: 64px;
+  padding: 0 24px;
+  font-size: 20px;
+  font-weight: 800;
+  box-shadow: 0 18px 42px var(--shadow);
+  pointer-events: auto;
 }
 
 .brand {
@@ -181,9 +214,9 @@ input {
 }
 
 .controls {
-  left: 16px;
-  right: 16px;
-  bottom: 16px;
+  left: calc(16px + env(safe-area-inset-left));
+  right: calc(16px + env(safe-area-inset-right));
+  bottom: calc(16px + env(safe-area-inset-bottom));
   display: flex;
   align-items: center;
   gap: 10px;
@@ -276,13 +309,28 @@ input {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+    left: calc(12px + env(safe-area-inset-left));
+    right: calc(12px + env(safe-area-inset-right));
+    top: calc(12px + env(safe-area-inset-top));
   }
 
   .status-row {
+    width: 100%;
+    flex-wrap: nowrap;
     justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .status-row::-webkit-scrollbar {
+    display: none;
   }
 
   .controls {
+    left: calc(12px + env(safe-area-inset-left));
+    right: calc(12px + env(safe-area-inset-right));
+    bottom: calc(12px + env(safe-area-inset-bottom));
     align-items: stretch;
     flex-wrap: wrap;
   }
@@ -291,16 +339,23 @@ input {
     flex: 1 1 120px;
   }
 
+  .controls .primary {
+    flex-basis: 100%;
+    min-height: 56px;
+    font-size: 18px;
+    font-weight: 800;
+  }
+
   .control-field {
     flex: 1 1 130px;
     justify-content: space-between;
   }
 
   .viewer-panel {
-    left: 16px;
-    right: 16px;
+    left: calc(12px + env(safe-area-inset-left));
+    right: calc(12px + env(safe-area-inset-right));
     top: auto;
-    bottom: 16px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
     width: auto;
   }
 }
