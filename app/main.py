@@ -58,7 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.get("/")
     async def root() -> RedirectResponse:
-        return RedirectResponse("/viewer")
+        return RedirectResponse("/phone")
 
     @api.get("/phone")
     async def phone() -> FileResponse:

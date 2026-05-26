@@ -15,6 +15,15 @@ def test_health_and_pages_load():
         assert client.get("/viewer").status_code == 200
 
 
+def test_root_redirects_to_phone_page():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/", follow_redirects=False)
+
+    assert response.status_code in {307, 308}
+    assert response.headers["location"] == "/phone"
+
+
 def test_phone_page_exposes_camera_start_action():
     app = create_app()
     with TestClient(app) as client:
