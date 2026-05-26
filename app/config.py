@@ -77,6 +77,12 @@ class Settings:
     capture_height: int
     jpeg_quality: float
     max_frame_bytes: int
+    remote_storage_url: str
+    remote_storage_token: str
+    remote_storage_include_frame: bool
+    remote_storage_queue_size: int
+    remote_storage_timeout: float
+    remote_storage_retries: int
     static_dir: Path
 
 
@@ -98,5 +104,11 @@ def get_settings() -> Settings:
         max_frame_bytes=_bounded_int_env(
             "MAX_FRAME_BYTES", 5 * 1024 * 1024, 64 * 1024, 50 * 1024 * 1024
         ),
+        remote_storage_url=os.getenv("REMOTE_STORAGE_URL", "").strip(),
+        remote_storage_token=os.getenv("REMOTE_STORAGE_TOKEN", "").strip(),
+        remote_storage_include_frame=_bool_env("REMOTE_STORAGE_INCLUDE_FRAME", False),
+        remote_storage_queue_size=_bounded_int_env("REMOTE_STORAGE_QUEUE_SIZE", 100, 1, 10000),
+        remote_storage_timeout=_bounded_float_env("REMOTE_STORAGE_TIMEOUT", 5.0, 0.1, 60.0),
+        remote_storage_retries=_bounded_int_env("REMOTE_STORAGE_RETRIES", 2, 0, 5),
         static_dir=ROOT_DIR / "static",
     )

@@ -7,6 +7,22 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 
 
+REMOTE_ENV = [
+    "REMOTE_STORAGE_URL",
+    "REMOTE_STORAGE_TOKEN",
+    "REMOTE_STORAGE_INCLUDE_FRAME",
+    "REMOTE_STORAGE_QUEUE_SIZE",
+    "REMOTE_STORAGE_TIMEOUT",
+    "REMOTE_STORAGE_RETRIES",
+]
+
+
+@pytest.fixture(autouse=True)
+def clear_remote_env(monkeypatch):
+    for name in REMOTE_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_health_and_pages_load():
     app = create_app()
     with TestClient(app) as client:
@@ -54,6 +70,7 @@ def test_status_includes_stream_metrics():
     assert status["process_fps"] == 0.0
     assert status["last_frame_bytes"] == 0
     assert status["avg_total_latency_ms"] == 0.0
+    assert status["remote_storage"]["enabled"] is False
 
 
 def test_camera_websocket_returns_detection_error_for_invalid_jpeg():

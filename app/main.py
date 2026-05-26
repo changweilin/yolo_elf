@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings
 from app.detector import DetectionError, YoloDetector, detection_error_payload
+from app.remote_storage import RemoteStorage
 from app.stream_state import CameraFrame, StreamHub
 
 
@@ -18,6 +19,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
     detector = YoloDetector(resolved_settings)
     hub = StreamHub(resolved_settings)
+    remote_storage = RemoteStorage(resolved_settings)
 
     async def detection_worker() -> None:
         while True:
@@ -35,14 +37,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 hub.frame_queue.task_done()
 
             await hub.publish_detection(frame, detection, processing_started_at)
+            await remote_storage.submit(frame, detection)
+
+    async def status_payload() -> dict[str, Any]:
+        status = await hub.snapshot(detector.status())
+        status["remote_storage"] = await remote_storage.snapshot()
+        return status
 
     @asynccontextmanager
     async def lifespan(api: FastAPI):
         api.state.settings = resolved_settings
         api.state.detector = detector
         api.state.hub = hub
+        api.state.remote_storage = remote_storage
         if resolved_settings.yolo_warmup:
             await asyncio.to_thread(detector.warmup)
+        await remote_storage.start()
         worker = asyncio.create_task(detection_worker())
         try:
             yield
@@ -52,6 +62,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await worker
             except asyncio.CancelledError:
                 pass
+            await remote_storage.stop()
 
     api = FastAPI(title="YOLO Elf", version="0.1.0", lifespan=lifespan)
     api.mount("/static", StaticFiles(directory=resolved_settings.static_dir), name="static")
@@ -74,7 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.get("/api/status")
     async def api_status() -> dict[str, Any]:
-        return await hub.snapshot(detector.status())
+        return await status_payload()
 
     @api.websocket("/ws/camera")
     async def camera_socket(websocket: WebSocket) -> None:
@@ -115,18 +126,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def viewer_socket(websocket: WebSocket) -> None:
         await websocket.accept()
         await hub.add_viewer(websocket)
-        await websocket.send_json(
-            {"type": "status", "status": await hub.snapshot(detector.status())}
-        )
+        await websocket.send_json({"type": "status", "status": await status_payload()})
         if not await hub.send_latest_to_viewer(websocket):
             await hub.remove_viewer(websocket)
             return
         try:
             while True:
                 await websocket.receive_text()
-                await websocket.send_json(
-                    {"type": "status", "status": await hub.snapshot(detector.status())}
-                )
+                await websocket.send_json({"type": "status", "status": await status_payload()})
         except WebSocketDisconnect:
             pass
         finally:

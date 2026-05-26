@@ -112,6 +112,35 @@ $env:YOLO_DEVICE = "0"
 .\scripts\bench.ps1 -Frames 30 -Warmup 3 -Device 0 -Half
 ```
 
+## Remote storage
+
+Set `REMOTE_STORAGE_URL` to enable background uploads of processed detections to a
+remote HTTP endpoint. When it is unset, remote storage is disabled.
+
+```powershell
+$env:REMOTE_STORAGE_URL = "https://storage.example/events"
+$env:REMOTE_STORAGE_TOKEN = "optional-bearer-token"
+$env:REMOTE_STORAGE_INCLUDE_FRAME = "0"
+.\scripts\run.ps1
+```
+
+Each upload is a JSON `POST` with `source`, `frame_id`, `received_at`,
+`received_at_iso`, and `detection`. If `REMOTE_STORAGE_INCLUDE_FRAME=1`, the
+payload also includes a JPEG `frame` object with `content_type`, `byte_length`,
+and base64 data. Upload status is exposed at `GET /api/status` under
+`remote_storage`.
+
+Optional settings:
+
+| Name | Default | Description |
+| --- | --- | --- |
+| `REMOTE_STORAGE_URL` | empty | Remote HTTP endpoint. Empty disables uploads. |
+| `REMOTE_STORAGE_TOKEN` | empty | Optional bearer token for the `Authorization` header. |
+| `REMOTE_STORAGE_INCLUDE_FRAME` | `0` | Include base64 JPEG frames in each upload. |
+| `REMOTE_STORAGE_QUEUE_SIZE` | `100` | Pending upload queue size. Oldest records are dropped when full. |
+| `REMOTE_STORAGE_TIMEOUT` | `5.0` | HTTP timeout in seconds. |
+| `REMOTE_STORAGE_RETRIES` | `2` | Retry count after a failed upload. |
+
 ## 常見狀況
 
 - `tailscale status` 顯示 access denied：Windows 上 Tailscale LocalAPI 可能需要系統權限；Serve 仍可用 `tailscale serve --bg 8766` 設定，必要時用系統管理員 PowerShell 執行。

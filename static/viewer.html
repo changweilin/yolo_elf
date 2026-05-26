@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>YOLO Elf Viewer</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <script src="/static/theme.js"></script>
     <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body>
@@ -17,10 +18,15 @@
 
       <header class="hud topbar">
         <div class="brand"><img src="/static/logo.svg" alt="YOLO Elf" /></div>
-        <div class="status-row">
-          <span id="viewerSocketStatus" class="chip warn">viewer 待命</span>
-          <span id="cameraLinkStatus" class="chip warn">phone 離線</span>
-          <span id="modelStatus" class="chip warn">model 待載入</span>
+        <div class="topbar-actions">
+          <div class="status-row">
+            <span id="viewerSocketStatus" class="chip warn">viewer 待命</span>
+            <span id="cameraLinkStatus" class="chip warn">phone 離線</span>
+            <span id="modelStatus" class="chip warn">model 待載入</span>
+          </div>
+          <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換亮色模式" title="切換亮色模式">
+            <span data-theme-icon aria-hidden="true">☾</span>
+          </button>
         </div>
       </header>
 

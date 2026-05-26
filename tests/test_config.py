@@ -17,6 +17,12 @@ SETTINGS_ENV = [
     "CAPTURE_HEIGHT",
     "JPEG_QUALITY",
     "MAX_FRAME_BYTES",
+    "REMOTE_STORAGE_URL",
+    "REMOTE_STORAGE_TOKEN",
+    "REMOTE_STORAGE_INCLUDE_FRAME",
+    "REMOTE_STORAGE_QUEUE_SIZE",
+    "REMOTE_STORAGE_TIMEOUT",
+    "REMOTE_STORAGE_RETRIES",
 ]
 
 
@@ -33,6 +39,12 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     monkeypatch.setenv("YOLO_WARMUP_RUNS", "2")
     monkeypatch.setenv("FRAME_FPS", "30")
     monkeypatch.setenv("JPEG_QUALITY", "0.8")
+    monkeypatch.setenv("REMOTE_STORAGE_URL", "https://storage.example/events")
+    monkeypatch.setenv("REMOTE_STORAGE_TOKEN", "secret")
+    monkeypatch.setenv("REMOTE_STORAGE_INCLUDE_FRAME", "yes")
+    monkeypatch.setenv("REMOTE_STORAGE_QUEUE_SIZE", "12")
+    monkeypatch.setenv("REMOTE_STORAGE_TIMEOUT", "3.5")
+    monkeypatch.setenv("REMOTE_STORAGE_RETRIES", "1")
 
     settings = get_settings()
 
@@ -42,6 +54,12 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     assert settings.yolo_warmup_runs == 2
     assert settings.frame_fps == 30
     assert settings.jpeg_quality == 0.8
+    assert settings.remote_storage_url == "https://storage.example/events"
+    assert settings.remote_storage_token == "secret"
+    assert settings.remote_storage_include_frame is True
+    assert settings.remote_storage_queue_size == 12
+    assert settings.remote_storage_timeout == 3.5
+    assert settings.remote_storage_retries == 1
 
 
 @pytest.mark.parametrize(
@@ -58,6 +76,10 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
         ("CAPTURE_HEIGHT", "32"),
         ("JPEG_QUALITY", "0.1"),
         ("MAX_FRAME_BYTES", "1024"),
+        ("REMOTE_STORAGE_INCLUDE_FRAME", "sometimes"),
+        ("REMOTE_STORAGE_QUEUE_SIZE", "0"),
+        ("REMOTE_STORAGE_TIMEOUT", "0"),
+        ("REMOTE_STORAGE_RETRIES", "6"),
     ],
 )
 def test_get_settings_rejects_out_of_range_values(monkeypatch, name, value):

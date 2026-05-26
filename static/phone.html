@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>YOLO Elf Phone</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <script src="/static/theme.js"></script>
     <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body>
@@ -22,11 +23,16 @@
 
       <header class="hud topbar">
         <div class="brand"><img src="/static/logo.svg" alt="YOLO Elf" /></div>
-        <div class="status-row">
-          <span id="cameraStatus" class="chip warn">相機待命</span>
-          <span id="socketStatus" class="chip warn">連線待命</span>
-          <span id="detectStatus" class="chip warn">尚無偵測</span>
-          <span id="adaptiveStatus" class="chip warn">adaptive idle</span>
+        <div class="topbar-actions">
+          <div class="status-row">
+            <span id="cameraStatus" class="chip warn">相機待命</span>
+            <span id="socketStatus" class="chip warn">連線待命</span>
+            <span id="detectStatus" class="chip warn">尚無偵測</span>
+            <span id="adaptiveStatus" class="chip warn">adaptive idle</span>
+          </div>
+          <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換亮色模式" title="切換亮色模式">
+            <span data-theme-icon aria-hidden="true">☾</span>
+          </button>
         </div>
       </header>
 
