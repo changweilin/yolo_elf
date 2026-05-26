@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$HostName = "127.0.0.1",
-    [int]$Port = 8000,
+    [string]$HostName = "0.0.0.0",
+    [int]$Port = 8766,
     [switch]$Reload
 )
 

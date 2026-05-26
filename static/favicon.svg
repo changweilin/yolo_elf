@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">YOLO Elf favicon</title>
+  <desc id="desc">Gold detection frame surrounding an isometric cube on a dark background.</desc>
+  <defs>
+    <linearGradient id="frame" x1="10" x2="54" y1="10" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f0bd49"/>
+      <stop offset="1" stop-color="#ffd76f"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#141413"/>
+  <rect x="7.5" y="7.5" width="49" height="49" rx="10.5" fill="none" stroke="#2e2b24" stroke-width="1.5"/>
+  <path d="M15 24v-8h8M41 16h8v8M49 40v8h-8M23 48h-8v-8" fill="none" stroke="url(#frame)" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.5"/>
+  <path d="M32 19.5 45 27v15L32 49.5 19 42V27l13-7.5Z" fill="none" stroke="#f0bd49" stroke-linejoin="round" stroke-width="3"/>
+  <path d="M19 27 32 34.5 45 27M32 34.5v15" fill="none" stroke="#ffd76f" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.4"/>
+</svg>

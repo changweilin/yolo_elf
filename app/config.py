@@ -49,8 +49,8 @@ class Settings:
 
 def get_settings() -> Settings:
     return Settings(
-        host=os.getenv("HOST", "127.0.0.1"),
-        port=_int_env("PORT", 8000),
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=_int_env("PORT", 8766),
         yolo_model=os.getenv("YOLO_MODEL", "yolov8n.pt"),
         yolo_device=os.getenv("YOLO_DEVICE", "auto"),
         conf_thresh=_float_env("CONF_THRESH", 0.35),

@@ -126,9 +126,18 @@ input {
 }
 
 .brand {
-  min-width: 118px;
-  font-size: 18px;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: 154px;
+  min-width: 154px;
+  height: 40px;
+}
+
+.brand img {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .status-row {

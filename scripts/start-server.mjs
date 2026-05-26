@@ -11,11 +11,11 @@ const hostFlagIndex = args.indexOf("--host");
 const host =
   hostFlagIndex >= 0 && args[hostFlagIndex + 1]
     ? args[hostFlagIndex + 1]
-    : process.env.HOST || "127.0.0.1";
+    : process.env.HOST || "0.0.0.0";
 const positionalArgs = args.filter(
   (_, index) => index !== hostFlagIndex && index !== hostFlagIndex + 1,
 );
-const port = positionalArgs[0] || process.env.PORT || "8000";
+const port = positionalArgs[0] || process.env.PORT || "8766";
 const python = path.join(root, ".venv", "Scripts", "python.exe");
 
 if (!fs.existsSync(python)) {
