@@ -92,7 +92,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+output {
   font: inherit;
 }
 
@@ -120,7 +122,22 @@ button.primary {
   background: var(--primary-bg);
 }
 
-input {
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 40px;
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+}
+
+.compact-button {
+  min-width: 86px;
+  white-space: nowrap;
+}
+
+input,
+select {
   width: 68px;
   min-height: 34px;
   border: 1px solid var(--line);
@@ -128,6 +145,17 @@ input {
   padding: 0 8px;
   color: var(--text);
   background: var(--input-bg);
+}
+
+select {
+  width: 96px;
+}
+
+input[type="range"] {
+  width: 128px;
+  min-height: 34px;
+  padding: 0;
+  accent-color: var(--good);
 }
 
 .camera-shell,
@@ -153,6 +181,10 @@ input {
   background: var(--stage-bg);
 }
 
+.camera-stage {
+  touch-action: none;
+}
+
 #cameraVideo,
 #viewerImage,
 #demoFrame {
@@ -175,6 +207,31 @@ input {
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+
+.focus-reticle {
+  position: absolute;
+  z-index: 2;
+  width: 72px;
+  height: 72px;
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.82);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    border-color 160ms ease;
+}
+
+.focus-reticle.active {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.focus-reticle.bad {
+  border-color: var(--warn);
 }
 
 .hud {
@@ -223,7 +280,15 @@ input {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  max-height: 84px;
   min-width: 0;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    max-height 180ms ease,
+    opacity 180ms ease,
+    transform 180ms ease;
 }
 
 .topbar-actions {
@@ -244,6 +309,7 @@ input {
   padding: 0;
 }
 
+.control-icon,
 .theme-icon {
   display: block;
   width: 20px;
@@ -305,9 +371,73 @@ input {
   right: calc(16px + env(safe-area-inset-right));
   bottom: calc(16px + env(safe-area-inset-bottom));
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.camera-control-row {
+  display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px;
+  min-height: 40px;
+}
+
+.camera-control-row .primary {
+  flex: 1 1 160px;
+}
+
+.settings-toggle {
+  flex: 0 0 40px;
+}
+
+.settings-toggle .control-icon {
+  transition: transform 180ms ease;
+}
+
+.advanced-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: 1 1 auto;
+  max-height: 110px;
+  min-width: 0;
+  overflow: hidden;
+  transform: translateY(0);
+  -webkit-mask-image: none;
+  mask-image: none;
+  transition:
+    max-height 180ms ease,
+    transform 180ms ease,
+    filter 180ms ease;
+}
+
+.camera-shell.settings-collapsed .status-row {
+  max-height: 0;
+  opacity: 0;
+  padding-bottom: 0;
+  pointer-events: none;
+  transform: translateY(-6px);
+}
+
+.camera-shell.settings-collapsed .controls {
+  gap: 4px;
+}
+
+.camera-shell.settings-collapsed .advanced-controls {
+  max-height: 12px;
+  pointer-events: none;
+  transform: translateY(-1px);
+  filter: saturate(0.7);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.46), rgba(0, 0, 0, 0));
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.46), rgba(0, 0, 0, 0));
+}
+
+.camera-shell.settings-collapsed .settings-toggle .control-icon {
+  transform: rotate(180deg);
 }
 
 .control-field {
@@ -315,6 +445,21 @@ input {
   align-items: center;
   gap: 8px;
   color: var(--muted);
+}
+
+.control-field-wide {
+  flex: 1 1 220px;
+}
+
+.control-field-wide .range-input {
+  flex: 1 1 120px;
+}
+
+#zoomValue {
+  min-width: 42px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .viewer-panel {
@@ -437,23 +582,43 @@ input {
     right: calc(12px + env(safe-area-inset-right));
     bottom: calc(12px + env(safe-area-inset-bottom));
     align-items: stretch;
-    flex-wrap: wrap;
   }
 
-  .controls button {
-    flex: 1 1 120px;
-  }
-
-  .controls .primary {
-    flex-basis: 100%;
+  .camera-control-row .primary {
+    flex: 1 1 auto;
     min-height: 56px;
     font-size: 18px;
     font-weight: 800;
   }
 
+  .controls .settings-toggle {
+    flex: 0 0 56px;
+    width: 56px;
+    min-width: 56px;
+    min-height: 56px;
+  }
+
+  .advanced-controls {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    max-height: 220px;
+  }
+
+  .camera-shell.settings-collapsed .advanced-controls {
+    max-height: 14px;
+  }
+
   .control-field {
     flex: 1 1 130px;
     justify-content: space-between;
+  }
+
+  .control-field-wide {
+    flex-basis: 100%;
+  }
+
+  .control-field-wide .range-input {
+    width: auto;
   }
 
   .viewer-panel {

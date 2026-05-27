@@ -1,8 +1,14 @@
 const video = document.querySelector("#cameraVideo");
+const cameraShell = document.querySelector(".camera-shell");
+const cameraStage = document.querySelector(".camera-stage");
 const demoFrame = document.querySelector("#demoFrame");
 const overlay = document.querySelector("#overlayCanvas");
 const capture = document.querySelector("#captureCanvas");
 const cameraIdle = document.querySelector("#cameraIdle");
+const focusReticle = document.querySelector("#focusReticle");
+const settingsToggleButton = document.querySelector("#settingsToggleButton");
+const advancedControls = document.querySelector("#advancedControls");
+const statusRow = document.querySelector("#statusRow");
 const cameraToggleButton =
   document.querySelector("#cameraToggleButton") ||
   document.querySelector("#startButton") ||
@@ -15,6 +21,11 @@ const cameraActionButtons = Array.from(
 const legacyStopButton = document.querySelector("#stopButton");
 const fpsInput = document.querySelector("#fpsInput");
 const qualityInput = document.querySelector("#qualityInput");
+const lensToggleButton = document.querySelector("#lensToggleButton");
+const zoomInput = document.querySelector("#zoomInput");
+const zoomValue = document.querySelector("#zoomValue");
+const shutterInput = document.querySelector("#shutterInput");
+const isoInput = document.querySelector("#isoInput");
 const cameraStatus = document.querySelector("#cameraStatus");
 const socketStatus = document.querySelector("#socketStatus");
 const detectStatus = document.querySelector("#detectStatus");
@@ -63,6 +74,23 @@ const state = {
     sendTimes: [],
     lastSkipReason: "",
   },
+  camera: {
+    facingMode: "environment",
+    capabilities: {},
+    settings: {},
+    zoom: 1,
+    pendingAdvanced: {},
+    applyPromise: null,
+  },
+  gesture: {
+    pointers: new Map(),
+    tap: null,
+    pinch: null,
+    suppressTap: false,
+  },
+  ui: {
+    settingsExpanded: true,
+  },
 };
 
 function isLocalHostname(hostname) {
@@ -102,6 +130,447 @@ function setIdleVisible(visible) {
   }
 }
 
+function setSettingsExpanded(expanded) {
+  state.ui.settingsExpanded = expanded;
+  cameraShell?.classList.toggle("settings-collapsed", !expanded);
+  if (settingsToggleButton) {
+    const label = expanded ? "Collapse settings" : "Expand settings";
+    settingsToggleButton.setAttribute("aria-expanded", expanded ? "true" : "false");
+    settingsToggleButton.setAttribute("aria-label", label);
+    settingsToggleButton.title = label;
+  }
+  if (advancedControls) {
+    advancedControls.setAttribute("aria-disabled", expanded ? "false" : "true");
+  }
+  if (statusRow) {
+    statusRow.setAttribute("aria-hidden", expanded ? "false" : "true");
+  }
+}
+
+function getVideoTrack() {
+  return state.stream?.getVideoTracks?.()[0] || null;
+}
+
+function selectedFacingMode() {
+  return state.camera.facingMode || "environment";
+}
+
+function cameraVideoConstraints() {
+  return {
+    facingMode: { ideal: selectedFacingMode() },
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    aspectRatio: { ideal: 16 / 9 },
+  };
+}
+
+function lensLabel(facingMode) {
+  return facingMode === "user" ? "Front" : "Back";
+}
+
+function nextFacingMode() {
+  return selectedFacingMode() === "user" ? "environment" : "user";
+}
+
+function supportedConstraint(name) {
+  const supported = navigator.mediaDevices?.getSupportedConstraints?.() || {};
+  return supported[name] === true;
+}
+
+function capabilityRange(capabilities, name) {
+  const range = capabilities?.[name];
+  if (
+    !range ||
+    !Number.isFinite(Number(range.min)) ||
+    !Number.isFinite(Number(range.max)) ||
+    Number(range.max) <= Number(range.min)
+  ) {
+    return null;
+  }
+  return {
+    min: Number(range.min),
+    max: Number(range.max),
+    step: Number.isFinite(Number(range.step)) && Number(range.step) > 0 ? Number(range.step) : null,
+  };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function clampToRangeStep(value, range) {
+  const clamped = clamp(Number(value), range.min, range.max);
+  if (!range.step) {
+    return clamped;
+  }
+  const steps = Math.round((clamped - range.min) / range.step);
+  return clamp(range.min + steps * range.step, range.min, range.max);
+}
+
+function decimalsForStep(step) {
+  if (!step || step >= 1) {
+    return 0;
+  }
+  return Math.min(6, Math.ceil(Math.abs(Math.log10(step))));
+}
+
+function formatControlNumber(value, step = null) {
+  if (!Number.isFinite(Number(value))) {
+    return "";
+  }
+  return Number(value).toFixed(decimalsForStep(step));
+}
+
+function formatZoom(value) {
+  return `${Number(value || 1).toFixed(1)}x`;
+}
+
+function defaultStepForRange(range, fallback = 1) {
+  if (range?.step) {
+    return range.step;
+  }
+  const span = Number(range?.max) - Number(range?.min);
+  if (!Number.isFinite(span) || span <= 0) {
+    return fallback;
+  }
+  return span <= 1 ? Math.max(span / 100, 0.000001) : fallback;
+}
+
+function setNumberInputCapability(input, range, value, fallbackStep = 1) {
+  if (!input) {
+    return;
+  }
+  input.disabled = !range;
+  if (!range) {
+    input.removeAttribute("min");
+    input.removeAttribute("max");
+    input.removeAttribute("step");
+    input.value = "";
+    return;
+  }
+  const step = defaultStepForRange(range, fallbackStep);
+  input.min = formatControlNumber(range.min, step);
+  input.max = formatControlNumber(range.max, step);
+  input.step = formatControlNumber(step, step);
+  input.value = Number.isFinite(Number(value)) ? formatControlNumber(clampToRangeStep(value, range), step) : "";
+}
+
+function setZoomCapability(range, value) {
+  if (!zoomInput || !zoomValue) {
+    return;
+  }
+  zoomInput.disabled = !range;
+  if (!range) {
+    zoomInput.min = "1";
+    zoomInput.max = "1";
+    zoomInput.step = "0.1";
+    zoomInput.value = "1";
+    zoomValue.textContent = "1.0x";
+    state.camera.zoom = 1;
+    return;
+  }
+
+  const step = range.step || 0.1;
+  const nextZoom = clampToRangeStep(value, { ...range, step });
+  zoomInput.min = formatControlNumber(range.min, step);
+  zoomInput.max = formatControlNumber(range.max, step);
+  zoomInput.step = formatControlNumber(step, step);
+  zoomInput.value = formatControlNumber(nextZoom, step);
+  zoomValue.textContent = formatZoom(nextZoom);
+  state.camera.zoom = nextZoom;
+}
+
+function syncCameraControls() {
+  const track = getVideoTrack();
+  const capabilities = track?.getCapabilities?.() || {};
+  const settings = track?.getSettings?.() || {};
+  state.camera.capabilities = capabilities;
+  state.camera.settings = settings;
+
+  if (settings.facingMode === "user" || settings.facingMode === "environment") {
+    state.camera.facingMode = settings.facingMode;
+  }
+  if (lensToggleButton) {
+    const currentMode = selectedFacingMode();
+    const targetMode = currentMode === "user" ? "back" : "front";
+    lensToggleButton.disabled = demoMode;
+    lensToggleButton.textContent = lensLabel(currentMode);
+    lensToggleButton.setAttribute("aria-label", `Switch to ${targetMode} camera`);
+  }
+
+  if (!track) {
+    setZoomCapability(null, 1);
+    setNumberInputCapability(shutterInput, null, null);
+    setNumberInputCapability(isoInput, null, null);
+    return;
+  }
+
+  const zoomRange = capabilityRange(capabilities, "zoom");
+  setZoomCapability(zoomRange, settings.zoom ?? state.camera.zoom ?? zoomRange?.min ?? 1);
+
+  const exposureModes = Array.isArray(capabilities.exposureMode) ? capabilities.exposureMode : [];
+  const manualExposure = exposureModes.length === 0 || exposureModes.includes("manual");
+  setNumberInputCapability(
+    shutterInput,
+    manualExposure ? capabilityRange(capabilities, "exposureTime") : null,
+    settings.exposureTime,
+  );
+  setNumberInputCapability(
+    isoInput,
+    manualExposure ? capabilityRange(capabilities, "iso") : null,
+    settings.iso,
+  );
+}
+
+async function tryApplyTrackAdvanced(advanced) {
+  const track = getVideoTrack();
+  if (!track?.applyConstraints || !advanced || Object.keys(advanced).length === 0) {
+    return false;
+  }
+
+  const attempts = [{ advanced: [advanced] }, advanced];
+  let lastError = null;
+  for (const constraints of attempts) {
+    try {
+      await track.applyConstraints(constraints);
+      state.camera.settings = track.getSettings?.() || {};
+      return true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  console.warn("Camera constraint rejected", advanced, lastError);
+  return false;
+}
+
+function queueTrackAdvanced(advanced) {
+  state.camera.pendingAdvanced = {
+    ...state.camera.pendingAdvanced,
+    ...advanced,
+  };
+
+  if (!state.camera.applyPromise) {
+    state.camera.applyPromise = flushTrackAdvancedQueue();
+  }
+  return state.camera.applyPromise;
+}
+
+async function flushTrackAdvancedQueue() {
+  let applied = true;
+  try {
+    while (Object.keys(state.camera.pendingAdvanced).length > 0 && getVideoTrack()) {
+      const advanced = state.camera.pendingAdvanced;
+      state.camera.pendingAdvanced = {};
+      applied = (await tryApplyTrackAdvanced(advanced)) && applied;
+    }
+    return applied;
+  } finally {
+    state.camera.applyPromise = null;
+    syncCameraControls();
+  }
+}
+
+function setCameraZoom(value) {
+  const range = capabilityRange(state.camera.capabilities, "zoom");
+  if (!range || !Number.isFinite(Number(value))) {
+    return false;
+  }
+  const zoom = clampToRangeStep(value, range);
+  state.camera.zoom = zoom;
+  setZoomCapability(range, zoom);
+  void queueTrackAdvanced({ zoom });
+  return true;
+}
+
+async function applyManualCameraNumber(input, capabilityName, label) {
+  const range = capabilityRange(state.camera.capabilities, capabilityName);
+  const value = Number(input?.value);
+  if (!range || !Number.isFinite(value)) {
+    return;
+  }
+
+  const nextValue = clampToRangeStep(value, range);
+  const advanced = { [capabilityName]: nextValue };
+  const exposureModes = Array.isArray(state.camera.capabilities.exposureMode)
+    ? state.camera.capabilities.exposureMode
+    : [];
+  if (exposureModes.includes("manual")) {
+    advanced.exposureMode = "manual";
+  }
+
+  input.value = formatControlNumber(nextValue, defaultStepForRange(range));
+  const applied = await queueTrackAdvanced(advanced);
+  setChip(cameraStatus, applied ? `${label} set` : `${label} unavailable`, applied ? "good" : "warn");
+}
+
+async function handleLensToggle() {
+  state.camera.facingMode = nextFacingMode();
+  if (!state.stream) {
+    syncCameraControls();
+    return;
+  }
+  setCameraToggle({ disabled: true, label: "Switching camera" });
+  stopCamera();
+  await startCamera();
+}
+
+function stagePointFromEvent(event) {
+  const rect = cameraStage.getBoundingClientRect();
+  const sourceWidth = video.videoWidth || rect.width;
+  const sourceHeight = video.videoHeight || rect.height;
+  const fit = fitContain(rect.width, rect.height, sourceWidth, sourceHeight);
+  const x = clamp((event.clientX - rect.left - fit.x) / Math.max(1, sourceWidth * fit.scale), 0, 1);
+  const y = clamp((event.clientY - rect.top - fit.y) / Math.max(1, sourceHeight * fit.scale), 0, 1);
+  return { x, y };
+}
+
+function showFocusReticle(event, ok = true) {
+  if (!focusReticle || !cameraStage) {
+    return;
+  }
+  const rect = cameraStage.getBoundingClientRect();
+  focusReticle.style.left = `${event.clientX - rect.left}px`;
+  focusReticle.style.top = `${event.clientY - rect.top}px`;
+  focusReticle.hidden = false;
+  focusReticle.classList.toggle("bad", !ok);
+  focusReticle.classList.remove("active");
+  requestAnimationFrame(() => focusReticle.classList.add("active"));
+  window.setTimeout(() => {
+    focusReticle.classList.remove("active");
+    window.setTimeout(() => {
+      focusReticle.hidden = true;
+    }, 180);
+  }, ok ? 520 : 700);
+}
+
+async function focusCameraAt(event) {
+  const track = getVideoTrack();
+  if (!track?.applyConstraints) {
+    showFocusReticle(event, false);
+    return;
+  }
+  if (state.camera.applyPromise) {
+    await state.camera.applyPromise;
+  }
+
+  const point = stagePointFromEvent(event);
+  const capabilities = state.camera.capabilities || {};
+  const focusModes = Array.isArray(capabilities.focusMode) ? capabilities.focusMode : [];
+  const supportsPointFocus =
+    supportedConstraint("pointsOfInterest") ||
+    Object.prototype.hasOwnProperty.call(capabilities, "pointsOfInterest");
+  const attempts = [];
+
+  if (supportsPointFocus && focusModes.includes("single-shot")) {
+    attempts.push({ focusMode: "single-shot", pointsOfInterest: [point] });
+  }
+  if (supportsPointFocus) {
+    attempts.push({ pointsOfInterest: [point] });
+  }
+  if (focusModes.includes("single-shot")) {
+    attempts.push({ focusMode: "single-shot" });
+  }
+  if (focusModes.includes("continuous")) {
+    attempts.push({ focusMode: "continuous" });
+  }
+
+  let focused = false;
+  for (const constraints of attempts) {
+    focused = await tryApplyTrackAdvanced(constraints);
+    if (focused) {
+      break;
+    }
+  }
+
+  showFocusReticle(event, focused);
+  setChip(cameraStatus, focused ? "focus set" : "focus unavailable", focused ? "good" : "warn");
+}
+
+function pointerDistance(points) {
+  const [first, second] = Array.from(points.values());
+  if (!first || !second) {
+    return 0;
+  }
+  return Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY);
+}
+
+function handleStagePointerDown(event) {
+  if (!state.stream || demoMode || (event.pointerType === "mouse" && event.button !== 0)) {
+    return;
+  }
+  cameraStage.setPointerCapture?.(event.pointerId);
+  state.gesture.pointers.set(event.pointerId, {
+    clientX: event.clientX,
+    clientY: event.clientY,
+  });
+
+  if (state.gesture.pointers.size === 1) {
+    state.gesture.tap = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      moved: false,
+      startedAt: performance.now(),
+    };
+    state.gesture.suppressTap = false;
+  }
+
+  if (state.gesture.pointers.size === 2) {
+    state.gesture.pinch = {
+      startDistance: pointerDistance(state.gesture.pointers),
+      startZoom: state.camera.zoom || 1,
+    };
+    state.gesture.suppressTap = true;
+  }
+}
+
+function handleStagePointerMove(event) {
+  if (!state.gesture.pointers.has(event.pointerId)) {
+    return;
+  }
+  state.gesture.pointers.set(event.pointerId, {
+    clientX: event.clientX,
+    clientY: event.clientY,
+  });
+
+  if (state.gesture.tap?.id === event.pointerId) {
+    const travel = Math.hypot(event.clientX - state.gesture.tap.x, event.clientY - state.gesture.tap.y);
+    state.gesture.tap.moved = state.gesture.tap.moved || travel > 12;
+  }
+
+  if (state.gesture.pinch && state.gesture.pointers.size >= 2) {
+    const distance = pointerDistance(state.gesture.pointers);
+    if (state.gesture.pinch.startDistance > 0 && distance > 0) {
+      event.preventDefault();
+      setCameraZoom(state.gesture.pinch.startZoom * (distance / state.gesture.pinch.startDistance));
+    }
+  }
+}
+
+function handleStagePointerUp(event) {
+  const tap = state.gesture.tap;
+  const wasSinglePointer = state.gesture.pointers.size === 1;
+  const shouldFocus =
+    tap?.id === event.pointerId &&
+    wasSinglePointer &&
+    !tap.moved &&
+    !state.gesture.suppressTap &&
+    performance.now() - tap.startedAt < 650;
+
+  state.gesture.pointers.delete(event.pointerId);
+  if (state.gesture.pointers.size < 2) {
+    state.gesture.pinch = null;
+  }
+  if (state.gesture.pointers.size === 0) {
+    state.gesture.tap = null;
+    state.gesture.suppressTap = false;
+  }
+
+  if (shouldFocus) {
+    void focusCameraAt(event);
+  }
+}
+
 function initializeDemoMode() {
   if (demoFrame) {
     demoFrame.hidden = false;
@@ -112,6 +581,7 @@ function initializeDemoMode() {
   setIdleVisible(false);
   fpsInput.disabled = true;
   qualityInput.disabled = true;
+  syncCameraControls();
   setChip(cameraStatus, "camera frozen", "warn");
   setChip(socketStatus, "socket offline", "warn");
   setChip(detectStatus, "demo boxes", "good");
@@ -143,15 +613,11 @@ async function startCamera() {
     }
     state.stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        aspectRatio: { ideal: 16 / 9 },
-      },
+      video: cameraVideoConstraints(),
     });
     video.srcObject = state.stream;
     await video.play();
+    syncCameraControls();
     setChip(cameraStatus, "camera connected", "good");
     setCameraToggle();
     connectSocket();
@@ -173,6 +639,7 @@ async function startCamera() {
     setIdleVisible(true);
     setChip(cameraStatus, "camera error", "bad");
     setChip(detectStatus, error.message || String(error), "bad");
+    syncCameraControls();
   }
 }
 
@@ -201,8 +668,14 @@ function stopCamera() {
     state.stream = null;
     video.srcObject = null;
   }
+  state.camera.pendingAdvanced = {};
+  state.gesture.pointers.clear();
+  state.gesture.tap = null;
+  state.gesture.pinch = null;
+  state.gesture.suppressTap = false;
   state.latestDetection = null;
   resetPacing();
+  syncCameraControls();
   setCameraToggle();
   setIdleVisible(true);
   setChip(cameraStatus, "camera idle", "warn");
@@ -500,7 +973,34 @@ for (const button of cameraActionButtons) {
 if (legacyStopButton) {
   legacyStopButton.addEventListener("click", stopCamera);
 }
+if (settingsToggleButton) {
+  settingsToggleButton.addEventListener("click", () =>
+    setSettingsExpanded(!state.ui.settingsExpanded),
+  );
+}
+if (lensToggleButton) {
+  lensToggleButton.addEventListener("click", handleLensToggle);
+}
+if (zoomInput) {
+  zoomInput.addEventListener("input", () => setCameraZoom(Number(zoomInput.value)));
+}
+if (shutterInput) {
+  shutterInput.addEventListener("change", () =>
+    applyManualCameraNumber(shutterInput, "exposureTime", "shutter"),
+  );
+}
+if (isoInput) {
+  isoInput.addEventListener("change", () => applyManualCameraNumber(isoInput, "iso", "ISO"));
+}
+if (cameraStage) {
+  cameraStage.addEventListener("pointerdown", handleStagePointerDown);
+  cameraStage.addEventListener("pointermove", handleStagePointerMove);
+  cameraStage.addEventListener("pointerup", handleStagePointerUp);
+  cameraStage.addEventListener("pointercancel", handleStagePointerUp);
+}
 window.addEventListener("resize", resizeOverlay);
+setSettingsExpanded(state.ui.settingsExpanded);
+syncCameraControls();
 
 if (demoMode) {
   initializeDemoMode();

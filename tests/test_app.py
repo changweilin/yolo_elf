@@ -49,7 +49,15 @@ def test_phone_page_exposes_camera_toggle_action():
     assert response.headers["cache-control"] == "no-store"
     assert response.text.count("Start camera") == 1
     assert 'id="cameraToggleButton"' in response.text
-    assert "/static/phone.js?v=camera-toggle-2" in response.text
+    assert 'id="settingsToggleButton"' in response.text
+    assert 'id="advancedControls"' in response.text
+    assert 'id="statusRow"' in response.text
+    assert 'id="lensToggleButton"' in response.text
+    assert 'id="lensSelect"' not in response.text
+    assert 'id="zoomInput"' in response.text
+    assert 'id="shutterInput"' in response.text
+    assert 'id="isoInput"' in response.text
+    assert "/static/phone.js?v=camera-controls-3" in response.text
     assert "data-start-camera" not in response.text
     assert 'id="stopButton"' not in response.text
 
