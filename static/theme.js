@@ -49,9 +49,12 @@
       button.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
       button.title = `Switch to ${nextLabel}`;
 
-      const icon = button.querySelector("[data-theme-icon]");
-      if (icon) {
-        icon.textContent = theme === "dark" ? "L" : "D";
+      const sunIcon = button.querySelector("[data-theme-icon-sun]");
+      const moonIcon = button.querySelector("[data-theme-icon-moon]");
+      if (sunIcon && moonIcon) {
+        const showSun = theme === "dark";
+        sunIcon.hidden = !showSun;
+        moonIcon.hidden = showSun;
       }
     }
   }

@@ -244,9 +244,27 @@ input {
   padding: 0;
 }
 
-.theme-toggle [data-theme-icon] {
-  font-size: 18px;
-  line-height: 1;
+.theme-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.theme-icon-moon {
+  display: none;
+}
+
+:root[data-theme="light"] .theme-icon-sun {
+  display: none;
+}
+
+:root[data-theme="light"] .theme-icon-moon {
+  display: block;
 }
 
 .chip {
@@ -380,14 +398,18 @@ input {
 
 @media (max-width: 720px) {
   .topbar {
-    align-items: flex-start;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px 12px;
     left: calc(12px + env(safe-area-inset-left));
     right: calc(12px + env(safe-area-inset-right));
     top: calc(12px + env(safe-area-inset-top));
   }
 
   .status-row {
+    grid-column: 1 / -1;
+    grid-row: 2;
     width: auto;
     flex-wrap: nowrap;
     justify-content: flex-start;
@@ -397,7 +419,13 @@ input {
   }
 
   .topbar-actions {
-    width: 100%;
+    display: contents;
+  }
+
+  .theme-toggle {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
   }
 
   .status-row::-webkit-scrollbar {
