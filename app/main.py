@@ -5,13 +5,13 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings
 from app.detector import DetectionError, YoloDetector, detection_error_payload
-from app.recordings import RecordingStore
+from app.recordings import RecordingStore, recording_storage_mode
 from app.remote_storage import RemoteStorage
 from app.stream_state import CameraFrame, StreamHub
 
@@ -96,8 +96,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.post("/api/recordings")
     async def api_recordings(request: Request) -> dict[str, Any]:
-        recording = await recording_store.save_request(request)
-        remote_result = await remote_storage.submit_recording(recording)
+        storage_mode = recording_storage_mode(
+            request.headers.get("x-yolo-elf-storage-mode")
+        )
+        wants_remote = storage_mode in {"remote", "both"}
+        if wants_remote and not remote_storage.recordings_enabled:
+            raise HTTPException(
+                status_code=400,
+                detail="Remote recording storage is not configured",
+            )
+
+        recording = await recording_store.save_request(request, storage_mode)
+        remote_result = (
+            await remote_storage.submit_recording(recording)
+            if wants_remote
+            else {"status": "skipped", "endpoint_configured": False}
+        )
         return {
             "type": "recording",
             "recording": recording.public_payload(),
@@ -127,6 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "enabled": resolved_settings.recording_enabled,
                     "max_bytes": resolved_settings.recording_max_bytes,
                     "remote_upload_enabled": remote_storage.recordings_enabled,
+                    "storage_modes": ["remote", "local", "both"],
                 },
             }
         )

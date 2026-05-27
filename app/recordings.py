@@ -22,6 +22,8 @@ _EXTENSIONS_BY_TYPE = {
     "application/octet-stream": "webm",
 }
 _MAX_DURATION_MS = 24 * 60 * 60 * 1000
+_STORAGE_MODES = {"local", "remote", "both"}
+_REMOTE_STAGING_DIR = ".remote-staging"
 
 
 @dataclass(frozen=True)
@@ -34,9 +36,11 @@ class RecordingRecord:
     duration_ms: int | None
     started_at: str | None
     created_at: float
+    storage_mode: str
+    local_saved: bool
 
     def public_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "id": self.recording_id,
             "filename": self.filename,
             "content_type": self.content_type,
@@ -47,8 +51,12 @@ class RecordingRecord:
             "created_at_iso": datetime.fromtimestamp(
                 self.created_at, timezone.utc
             ).isoformat(),
-            "download_url": f"/api/recordings/{self.recording_id}",
+            "storage_mode": self.storage_mode,
+            "local_saved": self.local_saved,
         }
+        if self.local_saved:
+            payload["download_url"] = f"/api/recordings/{self.recording_id}"
+        return payload
 
 
 class RecordingStore:
@@ -61,10 +69,12 @@ class RecordingStore:
         self.last_error: str | None = None
         self._lock = asyncio.Lock()
 
-    async def save_request(self, request: Request) -> RecordingRecord:
+    async def save_request(self, request: Request, storage_mode: str) -> RecordingRecord:
         if not self.settings.recording_enabled:
             raise HTTPException(status_code=403, detail="Recording is disabled")
 
+        storage_mode = recording_storage_mode(storage_mode)
+        local_saved = storage_mode in {"local", "both"}
         content_type = _clean_content_type(request.headers.get("content-type"))
         extension = _extension_for_content_type(content_type)
         duration_ms = _duration_header(request.headers.get("x-yolo-elf-duration-ms"))
@@ -78,6 +88,8 @@ class RecordingStore:
         recording_id = _recording_id(created_at)
         filename = f"{recording_id}.{extension}"
         storage_dir = self.settings.recording_storage_dir
+        if not local_saved:
+            storage_dir = storage_dir / _REMOTE_STAGING_DIR
         storage_dir.mkdir(parents=True, exist_ok=True)
         path = storage_dir / filename
         temp_path = storage_dir / f"{filename}.part"
@@ -109,12 +121,15 @@ class RecordingStore:
             duration_ms=duration_ms,
             started_at=started_at,
             created_at=created_at,
+            storage_mode=storage_mode,
+            local_saved=local_saved,
         )
         async with self._lock:
-            self.recordings_saved += 1
-            self.bytes_saved += total_bytes
-            self.last_recording_id = recording_id
-            self.last_saved_at = created_at
+            if local_saved:
+                self.recordings_saved += 1
+                self.bytes_saved += total_bytes
+                self.last_recording_id = recording_id
+                self.last_saved_at = created_at
             self.last_error = None
         return record
 
@@ -123,6 +138,7 @@ class RecordingStore:
             return {
                 "enabled": self.settings.recording_enabled,
                 "storage_dir": str(self.settings.recording_storage_dir),
+                "storage_modes": ["remote", "local", "both"],
                 "max_bytes": self.settings.recording_max_bytes,
                 "recordings_saved": self.recordings_saved,
                 "bytes_saved": self.bytes_saved,
@@ -157,6 +173,15 @@ class RecordingStore:
 def _recording_id(created_at: float) -> str:
     stamp = datetime.fromtimestamp(created_at, timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"rec-{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def recording_storage_mode(raw: str | None) -> str:
+    if raw is None or raw.strip() == "":
+        return "local"
+    storage_mode = raw.strip().lower()
+    if storage_mode not in _STORAGE_MODES:
+        raise HTTPException(status_code=400, detail="Recording storage mode is invalid")
+    return storage_mode
 
 
 def _clean_content_type(raw: str | None) -> str:

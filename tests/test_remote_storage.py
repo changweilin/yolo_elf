@@ -129,6 +129,8 @@ def test_remote_storage_posts_recording_payload(monkeypatch, tmp_path):
                     duration_ms=1200,
                     started_at="2026-05-27T08:00:00.000Z",
                     created_at=1710000000.0,
+                    storage_mode="both",
+                    local_saved=True,
                 )
             )
             await asyncio.wait_for(storage.drain(), timeout=1)
@@ -152,5 +154,52 @@ def test_remote_storage_posts_recording_payload(monkeypatch, tmp_path):
     assert "multipart/form-data" in request.headers["content-type"]
     assert b'name="recording_id"\r\n\r\nrec-test' in body
     assert b'name="duration_ms"\r\n\r\n1200' in body
+    assert b'name="storage_mode"\r\n\r\nboth' in body
+    assert b'name="local_saved"\r\n\r\n1' in body
     assert b'filename="rec-test.webm"' in body
     assert b"webm-bytes" in body
+
+
+def test_remote_only_recording_staging_file_is_removed_after_upload(monkeypatch, tmp_path):
+    clear_remote_env(monkeypatch)
+    monkeypatch.setenv("REMOTE_STORAGE_RECORDING_URL", "https://storage.example/recordings")
+    settings = get_settings()
+    recording_path = tmp_path / "rec-test.webm"
+    recording_path.write_bytes(b"webm-bytes")
+
+    def handler(_request):
+        return httpx.Response(201)
+
+    def client_factory():
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            timeout=settings.remote_storage_timeout,
+        )
+
+    async def run():
+        storage = RemoteStorage(settings, client_factory=client_factory)
+        await storage.start()
+        try:
+            await storage.submit_recording(
+                RecordingRecord(
+                    recording_id="rec-test",
+                    filename="rec-test.webm",
+                    path=recording_path,
+                    content_type="video/webm",
+                    byte_length=len(b"webm-bytes"),
+                    duration_ms=None,
+                    started_at=None,
+                    created_at=1710000000.0,
+                    storage_mode="remote",
+                    local_saved=False,
+                )
+            )
+            await asyncio.wait_for(storage.drain(), timeout=1)
+            return await storage.snapshot()
+        finally:
+            await storage.stop()
+
+    status = asyncio.run(run())
+
+    assert status["recordings_uploaded"] == 1
+    assert not recording_path.exists()

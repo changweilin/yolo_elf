@@ -32,6 +32,9 @@ const detectStatus = document.querySelector("#detectStatus");
 const recordingStatus = document.querySelector("#recordingStatus");
 const adaptiveStatus = document.querySelector("#adaptiveStatus");
 const recordButton = document.querySelector("#recordButton");
+const storageModeButtons = Array.from(
+  document.querySelectorAll("[data-storage-mode]"),
+);
 
 const moduleUrl = new URL(import.meta.url);
 const demoMode =
@@ -62,6 +65,8 @@ const state = {
   latestDetection: null,
   drawing: false,
   sending: false,
+  liveActive: false,
+  startingStream: false,
   config: {
     width: 1280,
     height: 720,
@@ -100,6 +105,8 @@ const state = {
     enabled: true,
     maxBytes: 250 * 1024 * 1024,
     tooLarge: false,
+    storageMode: "local",
+    remoteUploadEnabled: false,
   },
   ui: {
     settingsExpanded: true,
@@ -125,15 +132,15 @@ function setChip(element, text, tone) {
   element.classList.add(tone);
 }
 
-function setCameraToggle({ disabled = false, label = state.stream ? "Stop camera" : "Start camera" } = {}) {
+function setCameraToggle({ disabled = false, label = state.liveActive ? "Stop" : "Start" } = {}) {
   for (const button of cameraActionButtons) {
     button.disabled = disabled;
     button.textContent = label;
     button.setAttribute("aria-label", label);
-    button.setAttribute("aria-pressed", state.stream ? "true" : "false");
+    button.setAttribute("aria-pressed", state.liveActive ? "true" : "false");
   }
   if (legacyStopButton) {
-    legacyStopButton.disabled = disabled || !state.stream;
+    legacyStopButton.disabled = disabled || !state.liveActive;
   }
   setRecordButton();
 }
@@ -155,13 +162,62 @@ function setRecordButton() {
   const disabled =
     state.recording.uploading ||
     demoMode ||
-    (!recording && (!state.stream || !state.recording.enabled || !recordingSupported()));
+    state.startingStream ||
+    (!recording && (!state.recording.enabled || !recordingSupported()));
   const label = recording ? "Stop recording" : "Start recording";
   recordButton.disabled = disabled;
   recordButton.classList.toggle("recording", recording);
   recordButton.setAttribute("aria-label", label);
   recordButton.setAttribute("aria-pressed", recording ? "true" : "false");
   recordButton.title = label;
+}
+
+function storageModeLabel(mode = state.recording.storageMode) {
+  if (mode === "remote") {
+    return "remote";
+  }
+  if (mode === "both") {
+    return "local + remote";
+  }
+  return "local";
+}
+
+function setStorageMode(mode) {
+  if (!["local", "remote", "both"].includes(mode)) {
+    return;
+  }
+  state.recording.storageMode = mode;
+  try {
+    window.localStorage.setItem("yolo-elf-recording-storage-mode", mode);
+  } catch {
+    // Ignore private-mode storage failures.
+  }
+  syncStorageModeButtons();
+  setRecordingIdleStatus();
+}
+
+function syncStorageModeButtons() {
+  for (const button of storageModeButtons) {
+    const mode = button.dataset.storageMode;
+    const selected = mode === state.recording.storageMode;
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+    button.disabled = demoMode || state.recording.uploading || isRecording();
+    if (mode === "remote" || mode === "both") {
+      button.classList.toggle("unavailable", !state.recording.remoteUploadEnabled);
+    }
+  }
+}
+
+function restoreStorageModePreference() {
+  try {
+    const saved = window.localStorage.getItem("yolo-elf-recording-storage-mode");
+    if (["local", "remote", "both"].includes(saved)) {
+      state.recording.storageMode = saved;
+    }
+  } catch {
+    // Ignore private-mode storage failures.
+  }
+  syncStorageModeButtons();
 }
 
 function setIdleVisible(visible) {
@@ -333,7 +389,7 @@ function syncCameraControls() {
   if (lensToggleButton) {
     const currentMode = selectedFacingMode();
     const targetMode = currentMode === "user" ? "back" : "front";
-    lensToggleButton.disabled = demoMode;
+    lensToggleButton.disabled = demoMode || isRecording();
     lensToggleButton.textContent = lensLabel(currentMode);
     lensToggleButton.setAttribute("aria-label", `Switch to ${targetMode} camera`);
   }
@@ -444,14 +500,23 @@ async function applyManualCameraNumber(input, capabilityName, label) {
 }
 
 async function handleLensToggle() {
+  if (isRecording()) {
+    setChip(cameraStatus, "stop recording to switch", "warn");
+    return;
+  }
   state.camera.facingMode = nextFacingMode();
   if (!state.stream) {
     syncCameraControls();
     return;
   }
-  setCameraToggle({ disabled: true, label: "Switching camera" });
+  const wasLive = state.liveActive;
+  setCameraToggle({ disabled: true, label: "Switching" });
   stopCamera();
-  await startCamera();
+  if (wasLive) {
+    await startCamera();
+  } else {
+    await ensureCameraStream("switching camera");
+  }
 }
 
 function stagePointFromEvent(event) {
@@ -628,6 +693,7 @@ function initializeDemoMode() {
   setChip(recordingStatus, "recording frozen", "warn");
   setChip(adaptiveStatus, "privacy mode", "warn");
   setRecordButton();
+  syncStorageModeButtons();
   resizeOverlay();
   if (!state.drawing) {
     state.drawing = true;
@@ -645,10 +711,16 @@ function setRecordingIdleStatus() {
     setChip(recordingStatus, "recording disabled", "warn");
   } else if (!recordingSupported()) {
     setChip(recordingStatus, "recording unsupported", "bad");
+  } else if (
+    (state.recording.storageMode === "remote" || state.recording.storageMode === "both") &&
+    !state.recording.remoteUploadEnabled
+  ) {
+    setChip(recordingStatus, "remote unavailable", "warn");
   } else {
-    setChip(recordingStatus, state.stream ? "recording ready" : "recording idle", state.stream ? "good" : "warn");
+    setChip(recordingStatus, `${storageModeLabel()} ready`, state.stream ? "good" : "warn");
   }
   setRecordButton();
+  syncStorageModeButtons();
 }
 
 function recordingMimeType() {
@@ -669,13 +741,91 @@ function recordingByteLength() {
   return state.recording.chunks.reduce((total, chunk) => total + (chunk?.size || 0), 0);
 }
 
-function startRecording() {
-  if (demoMode || !state.stream || !state.recording.enabled || !recordingSupported()) {
+async function ensureCameraStream(reason = "camera starting") {
+  if (state.stream) {
+    return true;
+  }
+  if (state.startingStream) {
+    return false;
+  }
+
+  state.startingStream = true;
+  setCameraToggle({ disabled: true, label: "Starting" });
+  setRecordButton();
+  setIdleVisible(false);
+  setChip(cameraStatus, reason, "warn");
+  setChip(detectStatus, "allow camera access", "warn");
+
+  try {
+    if (cameraNeedsHttps()) {
+      throw new Error("Camera requires HTTPS. Use the Tailscale HTTPS URL for phone capture.");
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Camera API is not available in this browser context.");
+    }
+    state.stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: cameraVideoConstraints(),
+    });
+    video.hidden = false;
+    video.srcObject = state.stream;
+    await video.play();
+    syncCameraControls();
+    setChip(cameraStatus, "camera connected", "good");
+    setIdleVisible(false);
+    resizeOverlay();
+    if (!state.drawing) {
+      state.drawing = true;
+      requestAnimationFrame(drawOverlay);
+    }
+    return true;
+  } catch (error) {
+    stopMediaStream();
+    setIdleVisible(true);
+    setChip(cameraStatus, "camera error", "bad");
+    setChip(detectStatus, error.message || String(error), "bad");
+    syncCameraControls();
+    return false;
+  } finally {
+    state.startingStream = false;
+    setCameraToggle();
+    setRecordingIdleStatus();
+  }
+}
+
+function stopMediaStream() {
+  if (state.stream) {
+    for (const track of state.stream.getTracks()) {
+      track.stop();
+    }
+    state.stream = null;
+    video.srcObject = null;
+  }
+  state.camera.pendingAdvanced = {};
+  state.gesture.pointers.clear();
+  state.gesture.tap = null;
+  state.gesture.pinch = null;
+  state.gesture.suppressTap = false;
+  syncCameraControls();
+}
+
+async function startRecording() {
+  if (demoMode || !state.recording.enabled || !recordingSupported()) {
     setRecordingIdleStatus();
     return;
   }
   if (isRecording() || state.recording.uploading) {
     return;
+  }
+  if ((state.recording.storageMode === "remote" || state.recording.storageMode === "both") && !state.recording.remoteUploadEnabled) {
+    setChip(recordingStatus, "remote unavailable", "bad");
+    return;
+  }
+  if (!state.stream && !(await ensureCameraStream("camera starting"))) {
+    return;
+  }
+  if (!state.liveActive) {
+    setChip(detectStatus, "detection idle", "warn");
   }
 
   const mimeType = recordingMimeType();
@@ -708,6 +858,10 @@ function startRecording() {
     setRecordButton();
   } catch (error) {
     state.recording.recorder = null;
+    if (!state.liveActive) {
+      stopMediaStream();
+      setIdleVisible(true);
+    }
     setChip(recordingStatus, error.message || "recording error", "bad");
     setRecordButton();
   }
@@ -742,6 +896,11 @@ function handleRecordingStop() {
   state.recording.mimeType = "";
   state.recording.tooLarge = false;
   setRecordButton();
+  if (!state.liveActive) {
+    stopMediaStream();
+    setIdleVisible(true);
+    setChip(cameraStatus, "camera idle", "warn");
+  }
 
   if (tooLarge) {
     setChip(recordingStatus, "recording too large", "bad");
@@ -764,12 +923,14 @@ async function uploadRecording(blob, durationMs, startedAtIso) {
 
   state.recording.uploading = true;
   setRecordButton();
-  setChip(recordingStatus, "saving recording", "warn");
+  syncStorageModeButtons();
+  setChip(recordingStatus, `saving ${storageModeLabel()}`, "warn");
 
   try {
     const headers = {
       "Content-Type": blob.type || "application/octet-stream",
       "X-Yolo-Elf-Duration-Ms": String(durationMs),
+      "X-Yolo-Elf-Storage-Mode": state.recording.storageMode,
     };
     if (startedAtIso) {
       headers["X-Yolo-Elf-Started-At"] = startedAtIso;
@@ -785,9 +946,14 @@ async function uploadRecording(blob, durationMs, startedAtIso) {
     }
 
     const remoteStatus = payload.remote_storage?.status;
+    const localSaved = payload.recording?.local_saved;
     setChip(
       recordingStatus,
-      remoteStatus === "queued" ? "saved + remote queued" : "recording saved",
+      remoteStatus === "queued"
+        ? localSaved
+          ? "local + remote queued"
+          : "remote queued"
+        : "recording saved",
       "good",
     );
   } catch (error) {
@@ -795,6 +961,7 @@ async function uploadRecording(blob, durationMs, startedAtIso) {
   } finally {
     state.recording.uploading = false;
     setRecordButton();
+    syncStorageModeButtons();
   }
 }
 
@@ -804,50 +971,14 @@ async function startCamera() {
     return;
   }
 
-  setCameraToggle({ disabled: true, label: "Starting camera" });
-  setIdleVisible(false);
-  setChip(cameraStatus, "camera starting", "warn");
-  setChip(detectStatus, "allow camera access", "warn");
-
-  try {
-    if (cameraNeedsHttps()) {
-      throw new Error("Camera requires HTTPS. Use the Tailscale HTTPS URL for phone capture.");
-    }
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Camera API is not available in this browser context.");
-    }
-    state.stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: cameraVideoConstraints(),
-    });
-    video.srcObject = state.stream;
-    await video.play();
-    syncCameraControls();
-    setChip(cameraStatus, "camera connected", "good");
-    setCameraToggle();
-    setRecordingIdleStatus();
-    connectSocket();
-    resizeOverlay();
-    if (!state.drawing) {
-      state.drawing = true;
-      requestAnimationFrame(drawOverlay);
-    }
-    scheduleCapture(0);
-  } catch (error) {
-    if (state.stream) {
-      for (const track of state.stream.getTracks()) {
-        track.stop();
-      }
-      state.stream = null;
-      video.srcObject = null;
-    }
-    setCameraToggle();
-    setIdleVisible(true);
-    setChip(cameraStatus, "camera error", "bad");
-    setChip(detectStatus, error.message || String(error), "bad");
-    syncCameraControls();
-    setRecordingIdleStatus();
+  if (!(await ensureCameraStream("camera starting"))) {
+    return;
   }
+  state.liveActive = true;
+  setCameraToggle();
+  setRecordingIdleStatus();
+  connectSocket();
+  scheduleCapture(0);
 }
 
 function stopCamera() {
@@ -856,9 +987,6 @@ function stopCamera() {
     return;
   }
 
-  if (isRecording()) {
-    stopRecording();
-  }
   if (state.captureTimer) {
     clearTimeout(state.captureTimer);
     state.captureTimer = null;
@@ -871,24 +999,15 @@ function stopCamera() {
     state.ws.close();
     state.ws = null;
   }
-  if (state.stream) {
-    for (const track of state.stream.getTracks()) {
-      track.stop();
-    }
-    state.stream = null;
-    video.srcObject = null;
+  state.liveActive = false;
+  if (!isRecording()) {
+    stopMediaStream();
+    setIdleVisible(true);
   }
-  state.camera.pendingAdvanced = {};
-  state.gesture.pointers.clear();
-  state.gesture.tap = null;
-  state.gesture.pinch = null;
-  state.gesture.suppressTap = false;
   state.latestDetection = null;
   resetPacing();
-  syncCameraControls();
   setCameraToggle();
-  setIdleVisible(true);
-  setChip(cameraStatus, "camera idle", "warn");
+  setChip(cameraStatus, state.stream ? "camera recording" : "camera idle", state.stream ? "good" : "warn");
   setChip(socketStatus, "socket idle", "warn");
   setChip(detectStatus, "detection idle", "warn");
   setRecordingIdleStatus();
@@ -897,7 +1016,7 @@ function stopCamera() {
 }
 
 function connectSocket() {
-  if (!state.stream) {
+  if (!state.stream || !state.liveActive) {
     return;
   }
   if (state.ws && state.ws.readyState <= WebSocket.OPEN) {
@@ -942,7 +1061,7 @@ function connectSocket() {
       return;
     }
     state.ws = null;
-    if (state.stream) {
+    if (state.stream && state.liveActive) {
       setChip(socketStatus, "socket offline", "bad");
       state.reconnectTimer = setTimeout(connectSocket, 1200);
     }
@@ -971,7 +1090,29 @@ function applyRecordingConfig(config) {
   }
   state.recording.enabled = config.enabled !== false;
   state.recording.maxBytes = Number(config.max_bytes || state.recording.maxBytes);
+  state.recording.remoteUploadEnabled = config.remote_upload_enabled === true;
+  syncStorageModeButtons();
   setRecordingIdleStatus();
+}
+
+async function refreshRecordingStatus() {
+  if (demoMode) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/status", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const status = await response.json();
+    applyRecordingConfig({
+      enabled: status.recordings?.enabled,
+      max_bytes: status.recordings?.max_bytes,
+      remote_upload_enabled: status.remote_storage?.recording_endpoint_configured,
+    });
+  } catch {
+    // The WebSocket config will fill this in once live detection starts.
+  }
 }
 
 function scheduleCapture(delay = null) {
@@ -980,7 +1121,7 @@ function scheduleCapture(delay = null) {
 }
 
 function captureFrame() {
-  if (!state.stream) {
+  if (!state.stream || !state.liveActive) {
     return;
   }
   const skipReason = frameSkipReason();
@@ -1012,7 +1153,9 @@ function captureFrame() {
   } else {
     markFrameSkipped(skipReason);
   }
-  scheduleCapture();
+  if (state.liveActive) {
+    scheduleCapture();
+  }
 }
 
 function requestedFps() {
@@ -1180,7 +1323,7 @@ function colorForClass(classId) {
 }
 
 function toggleCamera() {
-  if (state.stream) {
+  if (state.liveActive) {
     stopCamera();
     return;
   }
@@ -1201,6 +1344,9 @@ for (const button of cameraActionButtons) {
 }
 if (recordButton) {
   recordButton.addEventListener("click", toggleRecording);
+}
+for (const button of storageModeButtons) {
+  button.addEventListener("click", () => setStorageMode(button.dataset.storageMode));
 }
 if (legacyStopButton) {
   legacyStopButton.addEventListener("click", stopCamera);
@@ -1231,9 +1377,11 @@ if (cameraStage) {
   cameraStage.addEventListener("pointercancel", handleStagePointerUp);
 }
 window.addEventListener("resize", resizeOverlay);
+restoreStorageModePreference();
 setSettingsExpanded(state.ui.settingsExpanded);
 syncCameraControls();
 setRecordingIdleStatus();
+void refreshRecordingStatus();
 
 if (demoMode) {
   initializeDemoMode();

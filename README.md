@@ -83,11 +83,13 @@ Remote storage is disabled unless `REMOTE_STORAGE_URL` is set. If enabled, the
 server posts detection metadata in the background; frames are included only when
 `REMOTE_STORAGE_INCLUDE_FRAME=1`.
 
-Phone recording uses the browser `MediaRecorder` API. When a recording stops,
-the phone page uploads the video to `/api/recordings`, and the server saves it
-under `RECORDING_STORAGE_DIR`. Set `REMOTE_STORAGE_RECORDING_URL` to also queue
-saved recordings for remote multipart upload. The same bearer token from
-`REMOTE_STORAGE_TOKEN` is used for detection and recording uploads.
+Phone recording uses the browser `MediaRecorder` API. The recording button can
+open the camera stream by itself; the `Start` button only controls live
+detection frames. Recording uploads include `X-Yolo-Elf-Storage-Mode` with
+`remote`, `local`, or `both`. Local recordings are saved under
+`RECORDING_STORAGE_DIR`; remote recording uploads require
+`REMOTE_STORAGE_RECORDING_URL` and use the same bearer token from
+`REMOTE_STORAGE_TOKEN`.
 
 ## Tests
 

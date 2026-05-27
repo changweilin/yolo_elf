@@ -51,9 +51,13 @@ def test_phone_page_exposes_camera_toggle_action():
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
-    assert response.text.count("Start camera") == 1
+    assert "Start camera" not in response.text
     assert 'id="cameraToggleButton"' in response.text
     assert 'id="recordButton"' in response.text
+    assert 'id="storageModeGroup"' in response.text
+    assert 'data-storage-mode="local"' in response.text
+    assert 'data-storage-mode="remote"' in response.text
+    assert 'data-storage-mode="both"' in response.text
     assert 'id="settingsToggleButton"' in response.text
     assert 'id="advancedControls"' in response.text
     assert 'id="statusRow"' in response.text
@@ -63,7 +67,7 @@ def test_phone_page_exposes_camera_toggle_action():
     assert 'id="zoomInput"' in response.text
     assert 'id="shutterInput"' in response.text
     assert 'id="isoInput"' in response.text
-    assert "/static/phone.js?v=recording-1" in response.text
+    assert "/static/phone.js?v=recording-2" in response.text
     assert "data-start-camera" not in response.text
     assert 'id="stopButton"' not in response.text
 
@@ -89,6 +93,7 @@ def test_status_includes_stream_metrics():
     assert status["last_frame_bytes"] == 0
     assert status["avg_total_latency_ms"] == 0.0
     assert status["recordings"]["enabled"] is True
+    assert status["recordings"]["storage_modes"] == ["remote", "local", "both"]
     assert status["recordings"]["recordings_saved"] == 0
     assert status["remote_storage"]["enabled"] is False
 
@@ -100,6 +105,7 @@ def test_camera_websocket_returns_detection_error_for_invalid_jpeg():
             config = websocket.receive_json()
             assert config["type"] == "config"
             assert config["recording"]["enabled"] is True
+            assert config["recording"]["storage_modes"] == ["remote", "local", "both"]
             websocket.send_bytes(b"not a jpeg")
             message = websocket.receive_json()
 
@@ -161,7 +167,9 @@ def test_recording_upload_saves_file_and_returns_download(tmp_path, monkeypatch)
     assert payload["recording"]["content_type"] == "video/webm"
     assert payload["recording"]["byte_length"] == len(body)
     assert payload["recording"]["duration_ms"] == 1234
-    assert payload["remote_storage"]["status"] == "disabled"
+    assert payload["recording"]["storage_mode"] == "local"
+    assert payload["recording"]["local_saved"] is True
+    assert payload["remote_storage"]["status"] == "skipped"
     assert download.status_code == 200
     assert download.content == body
     assert status["recordings"]["recordings_saved"] == 1
@@ -181,3 +189,39 @@ def test_recording_upload_can_be_disabled(tmp_path, monkeypatch):
         )
 
     assert response.status_code == 403
+
+
+def test_remote_recording_mode_requires_remote_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECORDING_STORAGE_DIR", str(tmp_path))
+    app = create_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/recordings",
+            content=b"webm-bytes",
+            headers={
+                "content-type": "video/webm",
+                "x-yolo-elf-storage-mode": "remote",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Remote recording storage is not configured"
+
+
+def test_invalid_recording_storage_mode_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECORDING_STORAGE_DIR", str(tmp_path))
+    app = create_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/recordings",
+            content=b"webm-bytes",
+            headers={
+                "content-type": "video/webm",
+                "x-yolo-elf-storage-mode": "cloudish",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Recording storage mode is invalid"

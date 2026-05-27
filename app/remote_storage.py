@@ -216,6 +216,8 @@ class RemoteStorage:
                 self.recordings_uploaded += 1
                 self.last_error = None
                 self.last_uploaded_at = _utc_timestamp()
+            if not record.local_saved:
+                record.path.unlink(missing_ok=True)
             return
 
         raise RuntimeError(last_error or "Remote recording upload failed")
@@ -246,6 +248,8 @@ class RemoteStorage:
             "filename": record.filename,
             "content_type": record.content_type,
             "byte_length": str(record.byte_length),
+            "storage_mode": record.storage_mode,
+            "local_saved": "1" if record.local_saved else "0",
             "created_at": str(record.created_at),
             "created_at_iso": datetime.fromtimestamp(
                 record.created_at, timezone.utc

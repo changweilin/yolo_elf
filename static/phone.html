@@ -49,7 +49,7 @@
       <section class="hud controls">
         <div class="camera-control-row">
           <button id="cameraToggleButton" class="primary" type="button">
-            Start camera
+            Start
           </button>
           <button
             id="recordButton"
@@ -57,7 +57,6 @@
             type="button"
             aria-label="Start recording"
             title="Start recording"
-            disabled
           >
             <svg class="control-icon record-icon-start" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
               <circle cx="12" cy="12" r="6"></circle>
@@ -66,6 +65,11 @@
               <rect x="8" y="8" width="8" height="8" rx="1"></rect>
             </svg>
           </button>
+          <div id="storageModeGroup" class="segmented-control storage-mode" role="group" aria-label="Recording storage">
+            <button type="button" data-storage-mode="remote" aria-pressed="false">Remote</button>
+            <button type="button" data-storage-mode="local" aria-pressed="true">Local</button>
+            <button type="button" data-storage-mode="both" aria-pressed="false">Both</button>
+          </div>
           <button
             id="settingsToggleButton"
             class="icon-button settings-toggle"
@@ -113,6 +117,6 @@
 
       <canvas id="captureCanvas" hidden></canvas>
     </main>
-    <script type="module" src="/static/phone.js?v=recording-1"></script>
+    <script type="module" src="/static/phone.js?v=recording-2"></script>
   </body>
 </html>
