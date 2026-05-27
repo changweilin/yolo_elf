@@ -1,0 +1,4 @@
+interface:
+  display_name: "YOLO Elf Config Data"
+  short_description: "Manage settings and data contracts."
+  default_prompt: "Use $yolo-elf-config-data to evolve YOLO Elf settings and data contracts."

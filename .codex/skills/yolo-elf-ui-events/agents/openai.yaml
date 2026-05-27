@@ -1,0 +1,4 @@
+interface:
+  display_name: "YOLO Elf UI Events"
+  short_description: "Trace camera and viewer UI event flows."
+  default_prompt: "Use $yolo-elf-ui-events to update YOLO Elf UI event flow safely."

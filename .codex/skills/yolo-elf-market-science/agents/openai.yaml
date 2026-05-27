@@ -1,0 +1,4 @@
+interface:
+  display_name: "YOLO Elf Market Science"
+  short_description: "Design evidence-based product analysis."
+  default_prompt: "Use $yolo-elf-market-science to design a data-backed market analysis for YOLO Elf."

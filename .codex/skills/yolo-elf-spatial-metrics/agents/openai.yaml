@@ -1,0 +1,4 @@
+interface:
+  display_name: "YOLO Elf Spatial Metrics"
+  short_description: "Verify box geometry and performance math."
+  default_prompt: "Use $yolo-elf-spatial-metrics to verify YOLO Elf box geometry and metrics."

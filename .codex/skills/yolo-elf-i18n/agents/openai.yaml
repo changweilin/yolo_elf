@@ -1,0 +1,4 @@
+interface:
+  display_name: "YOLO Elf I18N"
+  short_description: "Translate and repair YOLO Elf UI copy."
+  default_prompt: "Use $yolo-elf-i18n to localize YOLO Elf UI text."
