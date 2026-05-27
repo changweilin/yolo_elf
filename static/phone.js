@@ -3,8 +3,16 @@ const demoFrame = document.querySelector("#demoFrame");
 const overlay = document.querySelector("#overlayCanvas");
 const capture = document.querySelector("#captureCanvas");
 const cameraIdle = document.querySelector("#cameraIdle");
-const startButtons = Array.from(document.querySelectorAll("[data-start-camera]"));
-const stopButton = document.querySelector("#stopButton");
+const cameraToggleButton =
+  document.querySelector("#cameraToggleButton") ||
+  document.querySelector("#startButton") ||
+  document.querySelector("[data-start-camera]");
+const cameraActionButtons = Array.from(
+  new Set(
+    [cameraToggleButton, ...document.querySelectorAll("[data-start-camera]")].filter(Boolean),
+  ),
+);
+const legacyStopButton = document.querySelector("#stopButton");
 const fpsInput = document.querySelector("#fpsInput");
 const qualityInput = document.querySelector("#qualityInput");
 const cameraStatus = document.querySelector("#cameraStatus");
@@ -76,14 +84,22 @@ function setChip(element, text, tone) {
   element.classList.add(tone);
 }
 
-function setStartButtonsDisabled(disabled) {
-  for (const button of startButtons) {
+function setCameraToggle({ disabled = false, label = state.stream ? "Stop camera" : "Start camera" } = {}) {
+  for (const button of cameraActionButtons) {
     button.disabled = disabled;
+    button.textContent = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", state.stream ? "true" : "false");
+  }
+  if (legacyStopButton) {
+    legacyStopButton.disabled = disabled || !state.stream;
   }
 }
 
 function setIdleVisible(visible) {
-  cameraIdle.hidden = !visible;
+  if (cameraIdle) {
+    cameraIdle.hidden = !visible;
+  }
 }
 
 function initializeDemoMode() {
@@ -92,11 +108,10 @@ function initializeDemoMode() {
   }
   video.hidden = true;
   state.latestDetection = demoDetection;
-  setStartButtonsDisabled(true);
-  stopButton.disabled = true;
+  setCameraToggle({ disabled: true, label: "Demo mode" });
+  setIdleVisible(false);
   fpsInput.disabled = true;
   qualityInput.disabled = true;
-  setIdleVisible(false);
   setChip(cameraStatus, "camera frozen", "warn");
   setChip(socketStatus, "socket offline", "warn");
   setChip(detectStatus, "demo boxes", "good");
@@ -114,8 +129,11 @@ async function startCamera() {
     return;
   }
 
-  setStartButtonsDisabled(true);
+  setCameraToggle({ disabled: true, label: "Starting camera" });
   setIdleVisible(false);
+  setChip(cameraStatus, "camera starting", "warn");
+  setChip(detectStatus, "allow camera access", "warn");
+
   try {
     if (cameraNeedsHttps()) {
       throw new Error("Camera requires HTTPS. Use the Tailscale HTTPS URL for phone capture.");
@@ -135,7 +153,7 @@ async function startCamera() {
     video.srcObject = state.stream;
     await video.play();
     setChip(cameraStatus, "camera connected", "good");
-    stopButton.disabled = false;
+    setCameraToggle();
     connectSocket();
     resizeOverlay();
     if (!state.drawing) {
@@ -144,7 +162,14 @@ async function startCamera() {
     }
     scheduleCapture(0);
   } catch (error) {
-    setStartButtonsDisabled(false);
+    if (state.stream) {
+      for (const track of state.stream.getTracks()) {
+        track.stop();
+      }
+      state.stream = null;
+      video.srcObject = null;
+    }
+    setCameraToggle();
     setIdleVisible(true);
     setChip(cameraStatus, "camera error", "bad");
     setChip(detectStatus, error.message || String(error), "bad");
@@ -174,12 +199,12 @@ function stopCamera() {
       track.stop();
     }
     state.stream = null;
+    video.srcObject = null;
   }
   state.latestDetection = null;
   resetPacing();
-  setStartButtonsDisabled(false);
+  setCameraToggle();
   setIdleVisible(true);
-  stopButton.disabled = true;
   setChip(cameraStatus, "camera idle", "warn");
   setChip(socketStatus, "socket idle", "warn");
   setChip(detectStatus, "detection idle", "warn");
@@ -228,11 +253,12 @@ function connectSocket() {
   });
 
   ws.addEventListener("close", () => {
-    if (state.ws === ws) {
-      state.ws = null;
+    if (state.ws !== ws) {
+      return;
     }
-    setChip(socketStatus, "socket offline", "bad");
+    state.ws = null;
     if (state.stream) {
+      setChip(socketStatus, "socket offline", "bad");
       state.reconnectTimer = setTimeout(connectSocket, 1200);
     }
   });
@@ -459,10 +485,21 @@ function colorForClass(classId) {
   return colors[Math.abs(Number(classId || 0)) % colors.length];
 }
 
-for (const button of startButtons) {
-  button.addEventListener("click", startCamera);
+function toggleCamera() {
+  if (state.stream) {
+    stopCamera();
+    return;
+  }
+  startCamera();
 }
-stopButton.addEventListener("click", stopCamera);
+
+setCameraToggle();
+for (const button of cameraActionButtons) {
+  button.addEventListener("click", toggleCamera);
+}
+if (legacyStopButton) {
+  legacyStopButton.addEventListener("click", stopCamera);
+}
 window.addEventListener("resize", resizeOverlay);
 
 if (demoMode) {

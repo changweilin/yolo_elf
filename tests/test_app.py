@@ -40,14 +40,18 @@ def test_root_redirects_to_phone_page():
     assert response.headers["location"] == "/phone"
 
 
-def test_phone_page_exposes_camera_start_action():
+def test_phone_page_exposes_camera_toggle_action():
     app = create_app()
     with TestClient(app) as client:
         response = client.get("/phone")
 
     assert response.status_code == 200
-    assert "Start camera" in response.text
-    assert "data-start-camera" in response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert response.text.count("Start camera") == 1
+    assert 'id="cameraToggleButton"' in response.text
+    assert "/static/phone.js?v=camera-toggle-2" in response.text
+    assert "data-start-camera" not in response.text
+    assert 'id="stopButton"' not in response.text
 
 
 def test_viewer_links_to_phone_camera_page():

@@ -32,8 +32,16 @@ function rewriteHtml(html, { assetPrefix, phoneHref }) {
     .replaceAll('href="/static/', `href="${assetPrefix}static/`)
     .replaceAll('src="/static/', `src="${assetPrefix}static/`)
     .replaceAll('href="/phone"', `href="${phoneHref}"`)
-    .replace('src="' + assetPrefix + 'static/phone.js"', 'src="' + assetPrefix + 'static/phone.js?demo=1"')
-    .replace('src="' + assetPrefix + 'static/viewer.js"', 'src="' + assetPrefix + 'static/viewer.js?demo=1"');
+    .replace(
+      new RegExp(`src="${assetPrefix}static/phone\\.js([^"]*)"`),
+      (_match, query) =>
+        `src="${assetPrefix}static/phone.js${query || ""}${query ? "&" : "?"}demo=1"`,
+    )
+    .replace(
+      new RegExp(`src="${assetPrefix}static/viewer\\.js([^"]*)"`),
+      (_match, query) =>
+        `src="${assetPrefix}static/viewer.js${query || ""}${query ? "&" : "?"}demo=1"`,
+    );
 }
 
 function writePage(sourceName, targetRelativePath, options) {

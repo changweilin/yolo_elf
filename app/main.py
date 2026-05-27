@@ -73,7 +73,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.get("/phone")
     async def phone() -> FileResponse:
-        return FileResponse(resolved_settings.static_dir / "phone.html")
+        return FileResponse(
+            resolved_settings.static_dir / "phone.html",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @api.get("/viewer")
     async def viewer() -> FileResponse:
