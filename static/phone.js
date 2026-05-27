@@ -29,7 +29,9 @@ const isoInput = document.querySelector("#isoInput");
 const cameraStatus = document.querySelector("#cameraStatus");
 const socketStatus = document.querySelector("#socketStatus");
 const detectStatus = document.querySelector("#detectStatus");
+const recordingStatus = document.querySelector("#recordingStatus");
 const adaptiveStatus = document.querySelector("#adaptiveStatus");
+const recordButton = document.querySelector("#recordButton");
 
 const moduleUrl = new URL(import.meta.url);
 const demoMode =
@@ -88,6 +90,17 @@ const state = {
     pinch: null,
     suppressTap: false,
   },
+  recording: {
+    recorder: null,
+    chunks: [],
+    startedAtMs: 0,
+    startedAtIso: null,
+    mimeType: "",
+    uploading: false,
+    enabled: true,
+    maxBytes: 250 * 1024 * 1024,
+    tooLarge: false,
+  },
   ui: {
     settingsExpanded: true,
   },
@@ -122,6 +135,33 @@ function setCameraToggle({ disabled = false, label = state.stream ? "Stop camera
   if (legacyStopButton) {
     legacyStopButton.disabled = disabled || !state.stream;
   }
+  setRecordButton();
+}
+
+function isRecording() {
+  return state.recording.recorder?.state === "recording";
+}
+
+function recordingSupported() {
+  return typeof window.MediaRecorder === "function";
+}
+
+function setRecordButton() {
+  if (!recordButton) {
+    return;
+  }
+
+  const recording = isRecording();
+  const disabled =
+    state.recording.uploading ||
+    demoMode ||
+    (!recording && (!state.stream || !state.recording.enabled || !recordingSupported()));
+  const label = recording ? "Stop recording" : "Start recording";
+  recordButton.disabled = disabled;
+  recordButton.classList.toggle("recording", recording);
+  recordButton.setAttribute("aria-label", label);
+  recordButton.setAttribute("aria-pressed", recording ? "true" : "false");
+  recordButton.title = label;
 }
 
 function setIdleVisible(visible) {
@@ -585,11 +625,176 @@ function initializeDemoMode() {
   setChip(cameraStatus, "camera frozen", "warn");
   setChip(socketStatus, "socket offline", "warn");
   setChip(detectStatus, "demo boxes", "good");
+  setChip(recordingStatus, "recording frozen", "warn");
   setChip(adaptiveStatus, "privacy mode", "warn");
+  setRecordButton();
   resizeOverlay();
   if (!state.drawing) {
     state.drawing = true;
     requestAnimationFrame(drawOverlay);
+  }
+}
+
+function setRecordingIdleStatus() {
+  if (isRecording() || state.recording.uploading) {
+    return;
+  }
+  if (demoMode) {
+    setChip(recordingStatus, "recording frozen", "warn");
+  } else if (!state.recording.enabled) {
+    setChip(recordingStatus, "recording disabled", "warn");
+  } else if (!recordingSupported()) {
+    setChip(recordingStatus, "recording unsupported", "bad");
+  } else {
+    setChip(recordingStatus, state.stream ? "recording ready" : "recording idle", state.stream ? "good" : "warn");
+  }
+  setRecordButton();
+}
+
+function recordingMimeType() {
+  if (!recordingSupported() || typeof MediaRecorder.isTypeSupported !== "function") {
+    return "";
+  }
+
+  const preferredTypes = [
+    "video/webm;codecs=vp9",
+    "video/webm;codecs=vp8",
+    "video/webm",
+    "video/mp4",
+  ];
+  return preferredTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+}
+
+function recordingByteLength() {
+  return state.recording.chunks.reduce((total, chunk) => total + (chunk?.size || 0), 0);
+}
+
+function startRecording() {
+  if (demoMode || !state.stream || !state.recording.enabled || !recordingSupported()) {
+    setRecordingIdleStatus();
+    return;
+  }
+  if (isRecording() || state.recording.uploading) {
+    return;
+  }
+
+  const mimeType = recordingMimeType();
+  const options = mimeType ? { mimeType } : undefined;
+  try {
+    const recorder = new MediaRecorder(state.stream, options);
+    state.recording.recorder = recorder;
+    state.recording.chunks = [];
+    state.recording.startedAtMs = performance.now();
+    state.recording.startedAtIso = new Date().toISOString();
+    state.recording.mimeType = mimeType;
+    state.recording.tooLarge = false;
+
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data?.size > 0) {
+        state.recording.chunks.push(event.data);
+        if (recordingByteLength() > state.recording.maxBytes) {
+          state.recording.tooLarge = true;
+          stopRecording();
+        }
+      }
+    });
+    recorder.addEventListener("stop", handleRecordingStop);
+    recorder.addEventListener("error", (event) => {
+      setChip(recordingStatus, event.error?.message || "recording error", "bad");
+      stopRecording();
+    });
+    recorder.start(1000);
+    setChip(recordingStatus, "recording", "bad");
+    setRecordButton();
+  } catch (error) {
+    state.recording.recorder = null;
+    setChip(recordingStatus, error.message || "recording error", "bad");
+    setRecordButton();
+  }
+}
+
+function stopRecording() {
+  const recorder = state.recording.recorder;
+  if (!recorder || recorder.state === "inactive") {
+    return;
+  }
+  try {
+    recorder.requestData?.();
+    recorder.stop();
+  } catch (error) {
+    setChip(recordingStatus, error.message || "recording stop failed", "bad");
+  } finally {
+    setRecordButton();
+  }
+}
+
+function handleRecordingStop() {
+  const chunks = state.recording.chunks;
+  const startedAtIso = state.recording.startedAtIso;
+  const durationMs = Math.max(0, Math.round(performance.now() - state.recording.startedAtMs));
+  const mimeType = state.recording.recorder?.mimeType || state.recording.mimeType || chunks[0]?.type || "video/webm";
+  const tooLarge = state.recording.tooLarge;
+
+  state.recording.recorder = null;
+  state.recording.chunks = [];
+  state.recording.startedAtMs = 0;
+  state.recording.startedAtIso = null;
+  state.recording.mimeType = "";
+  state.recording.tooLarge = false;
+  setRecordButton();
+
+  if (tooLarge) {
+    setChip(recordingStatus, "recording too large", "bad");
+    return;
+  }
+  if (!chunks.length) {
+    setChip(recordingStatus, "recording empty", "warn");
+    return;
+  }
+
+  const blob = new Blob(chunks, { type: mimeType });
+  void uploadRecording(blob, durationMs, startedAtIso);
+}
+
+async function uploadRecording(blob, durationMs, startedAtIso) {
+  if (blob.size > state.recording.maxBytes) {
+    setChip(recordingStatus, "recording too large", "bad");
+    return;
+  }
+
+  state.recording.uploading = true;
+  setRecordButton();
+  setChip(recordingStatus, "saving recording", "warn");
+
+  try {
+    const headers = {
+      "Content-Type": blob.type || "application/octet-stream",
+      "X-Yolo-Elf-Duration-Ms": String(durationMs),
+    };
+    if (startedAtIso) {
+      headers["X-Yolo-Elf-Started-At"] = startedAtIso;
+    }
+    const response = await fetch("/api/recordings", {
+      method: "POST",
+      headers,
+      body: blob,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.detail || `Recording upload failed (${response.status})`);
+    }
+
+    const remoteStatus = payload.remote_storage?.status;
+    setChip(
+      recordingStatus,
+      remoteStatus === "queued" ? "saved + remote queued" : "recording saved",
+      "good",
+    );
+  } catch (error) {
+    setChip(recordingStatus, error.message || "recording upload failed", "bad");
+  } finally {
+    state.recording.uploading = false;
+    setRecordButton();
   }
 }
 
@@ -620,6 +825,7 @@ async function startCamera() {
     syncCameraControls();
     setChip(cameraStatus, "camera connected", "good");
     setCameraToggle();
+    setRecordingIdleStatus();
     connectSocket();
     resizeOverlay();
     if (!state.drawing) {
@@ -640,6 +846,7 @@ async function startCamera() {
     setChip(cameraStatus, "camera error", "bad");
     setChip(detectStatus, error.message || String(error), "bad");
     syncCameraControls();
+    setRecordingIdleStatus();
   }
 }
 
@@ -649,6 +856,9 @@ function stopCamera() {
     return;
   }
 
+  if (isRecording()) {
+    stopRecording();
+  }
   if (state.captureTimer) {
     clearTimeout(state.captureTimer);
     state.captureTimer = null;
@@ -681,6 +891,7 @@ function stopCamera() {
   setChip(cameraStatus, "camera idle", "warn");
   setChip(socketStatus, "socket idle", "warn");
   setChip(detectStatus, "detection idle", "warn");
+  setRecordingIdleStatus();
   setChip(adaptiveStatus, "adaptive idle", "warn");
   clearOverlay();
 }
@@ -706,6 +917,7 @@ function connectSocket() {
     const payload = JSON.parse(event.data);
     if (payload.type === "config") {
       applyServerConfig(payload.capture);
+      applyRecordingConfig(payload.recording);
       return;
     }
     if (payload.type === "detection") {
@@ -751,6 +963,15 @@ function applyServerConfig(config) {
   state.config.jpegQuality = Number(config.jpeg_quality || state.config.jpegQuality);
   fpsInput.value = String(state.config.fps);
   qualityInput.value = String(state.config.jpegQuality);
+}
+
+function applyRecordingConfig(config) {
+  if (!config) {
+    return;
+  }
+  state.recording.enabled = config.enabled !== false;
+  state.recording.maxBytes = Number(config.max_bytes || state.recording.maxBytes);
+  setRecordingIdleStatus();
 }
 
 function scheduleCapture(delay = null) {
@@ -966,9 +1187,20 @@ function toggleCamera() {
   startCamera();
 }
 
+function toggleRecording() {
+  if (isRecording()) {
+    stopRecording();
+    return;
+  }
+  startRecording();
+}
+
 setCameraToggle();
 for (const button of cameraActionButtons) {
   button.addEventListener("click", toggleCamera);
+}
+if (recordButton) {
+  recordButton.addEventListener("click", toggleRecording);
 }
 if (legacyStopButton) {
   legacyStopButton.addEventListener("click", stopCamera);
@@ -1001,10 +1233,12 @@ if (cameraStage) {
 window.addEventListener("resize", resizeOverlay);
 setSettingsExpanded(state.ui.settingsExpanded);
 syncCameraControls();
+setRecordingIdleStatus();
 
 if (demoMode) {
   initializeDemoMode();
 } else if (cameraNeedsHttps()) {
   setChip(cameraStatus, "needs HTTPS", "bad");
   setChip(detectStatus, "Use the HTTPS phone URL", "bad");
+  setRecordingIdleStatus();
 }

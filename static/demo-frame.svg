@@ -20,5 +20,5 @@
   <path d="M807 276h74M948 276h62M804 392h76M946 392h75" stroke="#b79a58" stroke-width="10" stroke-linecap="round"/>
   <rect x="76" y="590" width="1128" height="52" rx="26" fill="#0c0f10" opacity="0.74"/>
   <text x="80" y="90" fill="#f7f6f0" font-family="Inter, Segoe UI, sans-serif" font-size="32" font-weight="800">YOLO Elf static demo</text>
-  <text x="80" y="128" fill="#bbb6a8" font-family="Inter, Segoe UI, sans-serif" font-size="20">Camera, live frames, and uploads are frozen.</text>
+  <text x="80" y="128" fill="#bbb6a8" font-family="Inter, Segoe UI, sans-serif" font-size="20">Camera, recording, live frames, and uploads are frozen.</text>
 </svg>

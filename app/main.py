@@ -5,12 +5,13 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings
 from app.detector import DetectionError, YoloDetector, detection_error_payload
+from app.recordings import RecordingStore
 from app.remote_storage import RemoteStorage
 from app.stream_state import CameraFrame, StreamHub
 
@@ -19,6 +20,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
     detector = YoloDetector(resolved_settings)
     hub = StreamHub(resolved_settings)
+    recording_store = RecordingStore(resolved_settings)
     remote_storage = RemoteStorage(resolved_settings)
 
     async def detection_worker() -> None:
@@ -41,6 +43,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     async def status_payload() -> dict[str, Any]:
         status = await hub.snapshot(detector.status())
+        status["recordings"] = await recording_store.snapshot()
         status["remote_storage"] = await remote_storage.snapshot()
         return status
 
@@ -49,6 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         api.state.settings = resolved_settings
         api.state.detector = detector
         api.state.hub = hub
+        api.state.recording_store = recording_store
         api.state.remote_storage = remote_storage
         if resolved_settings.yolo_warmup:
             await asyncio.to_thread(detector.warmup)
@@ -90,6 +94,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def api_status() -> dict[str, Any]:
         return await status_payload()
 
+    @api.post("/api/recordings")
+    async def api_recordings(request: Request) -> dict[str, Any]:
+        recording = await recording_store.save_request(request)
+        remote_result = await remote_storage.submit_recording(recording)
+        return {
+            "type": "recording",
+            "recording": recording.public_payload(),
+            "remote_storage": remote_result,
+        }
+
+    @api.get("/api/recordings/{recording_id}")
+    async def api_recording(recording_id: str) -> FileResponse:
+        path, media_type = recording_store.resolve(recording_id)
+        return FileResponse(path, media_type=media_type, filename=path.name)
+
     @api.websocket("/ws/camera")
     async def camera_socket(websocket: WebSocket) -> None:
         await websocket.accept()
@@ -103,6 +122,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "fps": resolved_settings.frame_fps,
                     "jpeg_quality": resolved_settings.jpeg_quality,
                     "max_frame_bytes": resolved_settings.max_frame_bytes,
+                },
+                "recording": {
+                    "enabled": resolved_settings.recording_enabled,
+                    "max_bytes": resolved_settings.recording_max_bytes,
+                    "remote_upload_enabled": remote_storage.recordings_enabled,
                 },
             }
         )

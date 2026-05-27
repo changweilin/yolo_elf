@@ -5,14 +5,19 @@ import json
 import httpx
 
 from app.config import get_settings
+from app.recordings import RecordingRecord
 from app.remote_storage import RemoteStorage
 from app.stream_state import CameraFrame
 
 
 REMOTE_ENV = [
+    "RECORDING_ENABLED",
+    "RECORDING_STORAGE_DIR",
+    "RECORDING_MAX_BYTES",
     "REMOTE_STORAGE_URL",
     "REMOTE_STORAGE_TOKEN",
     "REMOTE_STORAGE_INCLUDE_FRAME",
+    "REMOTE_STORAGE_RECORDING_URL",
     "REMOTE_STORAGE_QUEUE_SIZE",
     "REMOTE_STORAGE_TIMEOUT",
     "REMOTE_STORAGE_RETRIES",
@@ -89,3 +94,63 @@ def test_remote_storage_posts_detection_payload(monkeypatch):
     assert payload["frame"]["content_type"] == "image/jpeg"
     assert payload["frame"]["byte_length"] == len(b"jpeg-bytes")
     assert payload["frame"]["base64"] == base64.b64encode(b"jpeg-bytes").decode("ascii")
+
+
+def test_remote_storage_posts_recording_payload(monkeypatch, tmp_path):
+    clear_remote_env(monkeypatch)
+    monkeypatch.setenv("REMOTE_STORAGE_RECORDING_URL", "https://storage.example/recordings")
+    monkeypatch.setenv("REMOTE_STORAGE_TOKEN", "secret-token")
+    settings = get_settings()
+    recording_path = tmp_path / "rec-test.webm"
+    recording_path.write_bytes(b"webm-bytes")
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(201)
+
+    def client_factory():
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            timeout=settings.remote_storage_timeout,
+        )
+
+    async def run():
+        storage = RemoteStorage(settings, client_factory=client_factory)
+        await storage.start()
+        try:
+            result = await storage.submit_recording(
+                RecordingRecord(
+                    recording_id="rec-test",
+                    filename="rec-test.webm",
+                    path=recording_path,
+                    content_type="video/webm",
+                    byte_length=len(b"webm-bytes"),
+                    duration_ms=1200,
+                    started_at="2026-05-27T08:00:00.000Z",
+                    created_at=1710000000.0,
+                )
+            )
+            await asyncio.wait_for(storage.drain(), timeout=1)
+            return result, await storage.snapshot()
+        finally:
+            await storage.stop()
+
+    result, status = asyncio.run(run())
+
+    assert result["status"] == "queued"
+    assert status["enabled"] is True
+    assert status["endpoint_configured"] is False
+    assert status["recording_endpoint_configured"] is True
+    assert status["recordings_uploaded"] == 1
+    assert status["recordings_failed"] == 0
+    assert len(requests) == 1
+    request = requests[0]
+    body = request.content
+    assert str(request.url) == "https://storage.example/recordings"
+    assert request.headers["authorization"] == "Bearer secret-token"
+    assert "multipart/form-data" in request.headers["content-type"]
+    assert b'name="recording_id"\r\n\r\nrec-test' in body
+    assert b'name="duration_ms"\r\n\r\n1200' in body
+    assert b'filename="rec-test.webm"' in body
+    assert b"webm-bytes" in body

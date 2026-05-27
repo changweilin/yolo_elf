@@ -9,6 +9,7 @@ from typing import Any, Callable
 import httpx
 
 from app.config import Settings
+from app.recordings import RecordingRecord
 from app.stream_state import CameraFrame
 
 
@@ -21,6 +22,7 @@ class RemoteStorageRecord:
 
 
 ClientFactory = Callable[[], httpx.AsyncClient]
+RemoteStorageItem = RemoteStorageRecord | RecordingRecord
 
 
 class RemoteStorage:
@@ -28,9 +30,11 @@ class RemoteStorage:
         self, settings: Settings, client_factory: ClientFactory | None = None
     ) -> None:
         self.settings = settings
-        self.enabled = bool(settings.remote_storage_url)
+        self.events_enabled = bool(settings.remote_storage_url)
+        self.recordings_enabled = bool(settings.remote_storage_recording_url)
+        self.enabled = self.events_enabled or self.recordings_enabled
         self._client_factory = client_factory or self._default_client
-        self._queue: asyncio.Queue[RemoteStorageRecord] = asyncio.Queue(
+        self._queue: asyncio.Queue[RemoteStorageItem] = asyncio.Queue(
             maxsize=settings.remote_storage_queue_size
         )
         self._worker: asyncio.Task[None] | None = None
@@ -39,6 +43,10 @@ class RemoteStorage:
         self.records_uploaded = 0
         self.records_failed = 0
         self.records_dropped = 0
+        self.recordings_enqueued = 0
+        self.recordings_uploaded = 0
+        self.recordings_failed = 0
+        self.recordings_dropped = 0
         self.last_error: str | None = None
         self.last_attempt_at: float | None = None
         self.last_uploaded_at: float | None = None
@@ -60,7 +68,7 @@ class RemoteStorage:
         self._worker = None
 
     async def submit(self, frame: CameraFrame, detection: dict[str, Any]) -> None:
-        if not self.enabled:
+        if not self.events_enabled:
             return
 
         record = RemoteStorageRecord(
@@ -70,18 +78,34 @@ class RemoteStorage:
             jpeg=frame.jpeg if self.settings.remote_storage_include_frame else None,
         )
 
+        await self._enqueue(record)
+
+    async def submit_recording(self, recording: RecordingRecord) -> dict[str, Any]:
+        if not self.recordings_enabled:
+            return {"status": "disabled", "endpoint_configured": False}
+
+        await self._enqueue(recording)
+        return {"status": "queued", "endpoint_configured": True}
+
+    async def _enqueue(self, item: RemoteStorageItem) -> None:
         if self._queue.full():
             try:
-                self._queue.get_nowait()
+                dropped = self._queue.get_nowait()
                 self._queue.task_done()
                 async with self._lock:
-                    self.records_dropped += 1
+                    if isinstance(dropped, RecordingRecord):
+                        self.recordings_dropped += 1
+                    else:
+                        self.records_dropped += 1
             except asyncio.QueueEmpty:
                 pass
 
-        self._queue.put_nowait(record)
+        self._queue.put_nowait(item)
         async with self._lock:
-            self.records_enqueued += 1
+            if isinstance(item, RecordingRecord):
+                self.recordings_enqueued += 1
+            else:
+                self.records_enqueued += 1
 
     async def drain(self) -> None:
         if self.enabled:
@@ -92,6 +116,9 @@ class RemoteStorage:
             return {
                 "enabled": self.enabled,
                 "endpoint_configured": bool(self.settings.remote_storage_url),
+                "recording_endpoint_configured": bool(
+                    self.settings.remote_storage_recording_url
+                ),
                 "include_frame": self.settings.remote_storage_include_frame,
                 "queue_depth": self._queue.qsize(),
                 "queue_size": self.settings.remote_storage_queue_size,
@@ -99,6 +126,10 @@ class RemoteStorage:
                 "records_uploaded": self.records_uploaded,
                 "records_failed": self.records_failed,
                 "records_dropped": self.records_dropped,
+                "recordings_enqueued": self.recordings_enqueued,
+                "recordings_uploaded": self.recordings_uploaded,
+                "recordings_failed": self.recordings_failed,
+                "recordings_dropped": self.recordings_dropped,
                 "last_error": self.last_error,
                 "last_attempt_at": self.last_attempt_at,
                 "last_uploaded_at": self.last_uploaded_at,
@@ -109,10 +140,16 @@ class RemoteStorage:
             while True:
                 record = await self._queue.get()
                 try:
-                    await self._upload_with_retries(client, record)
+                    if isinstance(record, RecordingRecord):
+                        await self._upload_recording_with_retries(client, record)
+                    else:
+                        await self._upload_with_retries(client, record)
                 except Exception as exc:
                     async with self._lock:
-                        self.records_failed += 1
+                        if isinstance(record, RecordingRecord):
+                            self.recordings_failed += 1
+                        else:
+                            self.records_failed += 1
                         self.last_error = str(exc)
                 finally:
                     self._queue.task_done()
@@ -146,6 +183,43 @@ class RemoteStorage:
 
         raise RuntimeError(last_error or "Remote storage upload failed")
 
+    async def _upload_recording_with_retries(
+        self, client: httpx.AsyncClient, record: RecordingRecord
+    ) -> None:
+        attempts = self.settings.remote_storage_retries + 1
+        last_error: str | None = None
+        for attempt in range(attempts):
+            async with self._lock:
+                self.last_attempt_at = _utc_timestamp()
+            try:
+                with record.path.open("rb") as recording_file:
+                    response = await client.post(
+                        self.settings.remote_storage_recording_url,
+                        data=self._recording_fields(record),
+                        files={
+                            "file": (
+                                record.filename,
+                                recording_file,
+                                record.content_type,
+                            )
+                        },
+                        headers=self._headers(),
+                    )
+                response.raise_for_status()
+            except Exception as exc:
+                last_error = str(exc)
+                if attempt < attempts - 1:
+                    await asyncio.sleep(min(2.0, 0.2 * (2**attempt)))
+                continue
+
+            async with self._lock:
+                self.recordings_uploaded += 1
+                self.last_error = None
+                self.last_uploaded_at = _utc_timestamp()
+            return
+
+        raise RuntimeError(last_error or "Remote recording upload failed")
+
     def _payload(self, record: RemoteStorageRecord) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "source": "yolo-elf",
@@ -163,6 +237,25 @@ class RemoteStorage:
                 "base64": base64.b64encode(record.jpeg).decode("ascii"),
             }
         return payload
+
+    def _recording_fields(self, record: RecordingRecord) -> dict[str, str]:
+        fields = {
+            "source": "yolo-elf",
+            "type": "recording",
+            "recording_id": record.recording_id,
+            "filename": record.filename,
+            "content_type": record.content_type,
+            "byte_length": str(record.byte_length),
+            "created_at": str(record.created_at),
+            "created_at_iso": datetime.fromtimestamp(
+                record.created_at, timezone.utc
+            ).isoformat(),
+        }
+        if record.duration_ms is not None:
+            fields["duration_ms"] = str(record.duration_ms)
+        if record.started_at:
+            fields["started_at"] = record.started_at
+        return fields
 
     def _headers(self) -> dict[str, str]:
         if not self.settings.remote_storage_token:

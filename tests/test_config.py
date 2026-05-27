@@ -17,9 +17,13 @@ SETTINGS_ENV = [
     "CAPTURE_HEIGHT",
     "JPEG_QUALITY",
     "MAX_FRAME_BYTES",
+    "RECORDING_ENABLED",
+    "RECORDING_STORAGE_DIR",
+    "RECORDING_MAX_BYTES",
     "REMOTE_STORAGE_URL",
     "REMOTE_STORAGE_TOKEN",
     "REMOTE_STORAGE_INCLUDE_FRAME",
+    "REMOTE_STORAGE_RECORDING_URL",
     "REMOTE_STORAGE_QUEUE_SIZE",
     "REMOTE_STORAGE_TIMEOUT",
     "REMOTE_STORAGE_RETRIES",
@@ -41,6 +45,9 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
     assert settings.capture_width == 1280
     assert settings.capture_height == 720
     assert settings.jpeg_quality == 0.85
+    assert settings.recording_enabled is True
+    assert settings.recording_storage_dir.name == "recordings"
+    assert settings.recording_max_bytes == 250 * 1024 * 1024
 
 
 def test_get_settings_accepts_valid_overrides(monkeypatch):
@@ -51,9 +58,13 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     monkeypatch.setenv("YOLO_WARMUP_RUNS", "2")
     monkeypatch.setenv("FRAME_FPS", "30")
     monkeypatch.setenv("JPEG_QUALITY", "0.8")
+    monkeypatch.setenv("RECORDING_ENABLED", "false")
+    monkeypatch.setenv("RECORDING_STORAGE_DIR", "test-recordings")
+    monkeypatch.setenv("RECORDING_MAX_BYTES", "1048576")
     monkeypatch.setenv("REMOTE_STORAGE_URL", "https://storage.example/events")
     monkeypatch.setenv("REMOTE_STORAGE_TOKEN", "secret")
     monkeypatch.setenv("REMOTE_STORAGE_INCLUDE_FRAME", "yes")
+    monkeypatch.setenv("REMOTE_STORAGE_RECORDING_URL", "https://storage.example/recordings")
     monkeypatch.setenv("REMOTE_STORAGE_QUEUE_SIZE", "12")
     monkeypatch.setenv("REMOTE_STORAGE_TIMEOUT", "3.5")
     monkeypatch.setenv("REMOTE_STORAGE_RETRIES", "1")
@@ -66,9 +77,13 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     assert settings.yolo_warmup_runs == 2
     assert settings.frame_fps == 30
     assert settings.jpeg_quality == 0.8
+    assert settings.recording_enabled is False
+    assert settings.recording_storage_dir.name == "test-recordings"
+    assert settings.recording_max_bytes == 1048576
     assert settings.remote_storage_url == "https://storage.example/events"
     assert settings.remote_storage_token == "secret"
     assert settings.remote_storage_include_frame is True
+    assert settings.remote_storage_recording_url == "https://storage.example/recordings"
     assert settings.remote_storage_queue_size == 12
     assert settings.remote_storage_timeout == 3.5
     assert settings.remote_storage_retries == 1
@@ -88,6 +103,8 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
         ("CAPTURE_HEIGHT", "32"),
         ("JPEG_QUALITY", "0.1"),
         ("MAX_FRAME_BYTES", "1024"),
+        ("RECORDING_ENABLED", "sometimes"),
+        ("RECORDING_MAX_BYTES", "1024"),
         ("REMOTE_STORAGE_INCLUDE_FRAME", "sometimes"),
         ("REMOTE_STORAGE_QUEUE_SIZE", "0"),
         ("REMOTE_STORAGE_TIMEOUT", "0"),

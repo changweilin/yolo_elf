@@ -2,6 +2,7 @@
 __pycache__/
 .pytest_cache/
 .ultralytics/
+recordings/
 dist/
 *.pyc
 *.pyo
@@ -14,6 +15,7 @@ dist/
 *.avi
 *.mov
 *.mkv
+*.webm
 *.jpg
 *.jpeg
 *.png

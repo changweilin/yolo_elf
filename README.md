@@ -44,6 +44,7 @@ In this static demo, privacy-sensitive live features are frozen:
 
 - camera access is disabled
 - WebSocket streaming is disabled
+- recording is disabled
 - remote uploads are disabled
 - detection boxes are rendered from a synthetic demo frame
 
@@ -67,10 +68,26 @@ Common environment variables:
 | `CAPTURE_HEIGHT` | `720` | Capture height. |
 | `JPEG_QUALITY` | `0.85` | JPEG quality sent over WebSocket. |
 | `MAX_FRAME_BYTES` | `5242880` | Maximum accepted frame size. |
+| `RECORDING_ENABLED` | `1` | Enables browser recordings uploaded to the server. |
+| `RECORDING_STORAGE_DIR` | `recordings` | Directory where uploaded recordings are saved. |
+| `RECORDING_MAX_BYTES` | `262144000` | Maximum accepted recording upload size. |
+| `REMOTE_STORAGE_URL` | empty | Optional detection metadata upload endpoint. |
+| `REMOTE_STORAGE_TOKEN` | empty | Optional bearer token for remote uploads. |
+| `REMOTE_STORAGE_INCLUDE_FRAME` | `0` | Includes JPEG frame bytes in detection uploads. |
+| `REMOTE_STORAGE_RECORDING_URL` | empty | Optional multipart recording upload endpoint. |
+| `REMOTE_STORAGE_QUEUE_SIZE` | `100` | Background remote upload queue size. |
+| `REMOTE_STORAGE_TIMEOUT` | `5.0` | Remote upload timeout in seconds. |
+| `REMOTE_STORAGE_RETRIES` | `2` | Retry count for each remote upload. |
 
 Remote storage is disabled unless `REMOTE_STORAGE_URL` is set. If enabled, the
 server posts detection metadata in the background; frames are included only when
 `REMOTE_STORAGE_INCLUDE_FRAME=1`.
+
+Phone recording uses the browser `MediaRecorder` API. When a recording stops,
+the phone page uploads the video to `/api/recordings`, and the server saves it
+under `RECORDING_STORAGE_DIR`. Set `REMOTE_STORAGE_RECORDING_URL` to also queue
+saved recordings for remote multipart upload. The same bearer token from
+`REMOTE_STORAGE_TOKEN` is used for detection and recording uploads.
 
 ## Tests
 

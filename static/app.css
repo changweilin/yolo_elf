@@ -393,6 +393,35 @@ input[type="range"] {
   flex: 0 0 40px;
 }
 
+.record-toggle {
+  flex: 0 0 40px;
+  color: var(--bad);
+}
+
+.record-toggle .record-icon-start {
+  fill: currentColor;
+  stroke: currentColor;
+}
+
+.record-toggle .record-icon-stop {
+  display: none;
+  fill: currentColor;
+  stroke: currentColor;
+}
+
+.record-toggle.recording {
+  border-color: color-mix(in srgb, var(--bad) 68%, transparent);
+  background: color-mix(in srgb, var(--bad) 16%, transparent);
+}
+
+.record-toggle.recording .record-icon-start {
+  display: none;
+}
+
+.record-toggle.recording .record-icon-stop {
+  display: block;
+}
+
 .settings-toggle .control-icon {
   transition: transform 180ms ease;
 }
@@ -592,6 +621,13 @@ input[type="range"] {
   }
 
   .controls .settings-toggle {
+    flex: 0 0 56px;
+    width: 56px;
+    min-width: 56px;
+    min-height: 56px;
+  }
+
+  .controls .record-toggle {
     flex: 0 0 56px;
     width: 56px;
     min-width: 56px;

@@ -8,9 +8,13 @@ from app.main import create_app
 
 
 REMOTE_ENV = [
+    "RECORDING_ENABLED",
+    "RECORDING_STORAGE_DIR",
+    "RECORDING_MAX_BYTES",
     "REMOTE_STORAGE_URL",
     "REMOTE_STORAGE_TOKEN",
     "REMOTE_STORAGE_INCLUDE_FRAME",
+    "REMOTE_STORAGE_RECORDING_URL",
     "REMOTE_STORAGE_QUEUE_SIZE",
     "REMOTE_STORAGE_TIMEOUT",
     "REMOTE_STORAGE_RETRIES",
@@ -49,15 +53,17 @@ def test_phone_page_exposes_camera_toggle_action():
     assert response.headers["cache-control"] == "no-store"
     assert response.text.count("Start camera") == 1
     assert 'id="cameraToggleButton"' in response.text
+    assert 'id="recordButton"' in response.text
     assert 'id="settingsToggleButton"' in response.text
     assert 'id="advancedControls"' in response.text
     assert 'id="statusRow"' in response.text
+    assert 'id="recordingStatus"' in response.text
     assert 'id="lensToggleButton"' in response.text
     assert 'id="lensSelect"' not in response.text
     assert 'id="zoomInput"' in response.text
     assert 'id="shutterInput"' in response.text
     assert 'id="isoInput"' in response.text
-    assert "/static/phone.js?v=camera-controls-3" in response.text
+    assert "/static/phone.js?v=recording-1" in response.text
     assert "data-start-camera" not in response.text
     assert 'id="stopButton"' not in response.text
 
@@ -82,6 +88,8 @@ def test_status_includes_stream_metrics():
     assert status["process_fps"] == 0.0
     assert status["last_frame_bytes"] == 0
     assert status["avg_total_latency_ms"] == 0.0
+    assert status["recordings"]["enabled"] is True
+    assert status["recordings"]["recordings_saved"] == 0
     assert status["remote_storage"]["enabled"] is False
 
 
@@ -91,6 +99,7 @@ def test_camera_websocket_returns_detection_error_for_invalid_jpeg():
         with client.websocket_connect("/ws/camera") as websocket:
             config = websocket.receive_json()
             assert config["type"] == "config"
+            assert config["recording"]["enabled"] is True
             websocket.send_bytes(b"not a jpeg")
             message = websocket.receive_json()
 
@@ -112,6 +121,7 @@ def test_viewer_receives_binary_frame_after_metadata():
             with client.websocket_connect("/ws/camera") as camera:
                 config = camera.receive_json()
                 assert config["type"] == "config"
+                assert config["recording"]["max_bytes"] > 0
                 camera.send_bytes(frame)
 
                 camera_message = camera.receive_json()
@@ -125,3 +135,49 @@ def test_viewer_receives_binary_frame_after_metadata():
     assert viewer_metadata["byte_length"] == len(frame)
     assert "jpeg" not in viewer_metadata
     assert viewer_frame == frame
+
+
+def test_recording_upload_saves_file_and_returns_download(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECORDING_STORAGE_DIR", str(tmp_path))
+    app = create_app()
+    body = b"webm-bytes"
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/recordings",
+            content=body,
+            headers={
+                "content-type": "video/webm",
+                "x-yolo-elf-duration-ms": "1234",
+                "x-yolo-elf-started-at": "2026-05-27T08:00:00.000Z",
+            },
+        )
+        payload = response.json()
+        download = client.get(payload["recording"]["download_url"])
+        status = client.get("/api/status").json()
+
+    assert response.status_code == 200
+    assert payload["type"] == "recording"
+    assert payload["recording"]["content_type"] == "video/webm"
+    assert payload["recording"]["byte_length"] == len(body)
+    assert payload["recording"]["duration_ms"] == 1234
+    assert payload["remote_storage"]["status"] == "disabled"
+    assert download.status_code == 200
+    assert download.content == body
+    assert status["recordings"]["recordings_saved"] == 1
+    assert list(tmp_path.glob("*.webm"))
+
+
+def test_recording_upload_can_be_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECORDING_STORAGE_DIR", str(tmp_path))
+    monkeypatch.setenv("RECORDING_ENABLED", "0")
+    app = create_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/recordings",
+            content=b"webm-bytes",
+            headers={"content-type": "video/webm"},
+        )
+
+    assert response.status_code == 403

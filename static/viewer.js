@@ -4,10 +4,13 @@ const emptyState = document.querySelector("#emptyState");
 const viewerSocketStatus = document.querySelector("#viewerSocketStatus");
 const cameraLinkStatus = document.querySelector("#cameraLinkStatus");
 const modelStatus = document.querySelector("#modelStatus");
+const storageStatus = document.querySelector("#storageStatus");
 const frameMetric = document.querySelector("#frameMetric");
 const boxesMetric = document.querySelector("#boxesMetric");
 const inferenceMetric = document.querySelector("#inferenceMetric");
 const droppedMetric = document.querySelector("#droppedMetric");
+const recordingMetric = document.querySelector("#recordingMetric");
+const uploadMetric = document.querySelector("#uploadMetric");
 const errorLine = document.querySelector("#errorLine");
 
 const moduleUrl = new URL(import.meta.url);
@@ -99,7 +102,10 @@ function renderDemoViewer() {
   setChip(viewerSocketStatus, "viewer demo", "warn");
   setChip(cameraLinkStatus, "phone frozen", "warn");
   setChip(modelStatus, "demo snapshot", "warn");
+  setChip(storageStatus, "storage frozen", "warn");
   droppedMetric.textContent = "0";
+  recordingMetric.textContent = "0";
+  uploadMetric.textContent = "0";
   state.latestDetection = demoDetection;
   image.src = staticAsset("demo-frame.svg");
   emptyState.hidden = true;
@@ -149,6 +155,15 @@ function renderStatus(status) {
   const modelText = detector.loaded ? detector.model : "model not loaded";
   setChip(modelStatus, modelText, detector.last_load_error ? "bad" : detector.loaded ? "good" : "warn");
   droppedMetric.textContent = String(status.frames_dropped ?? "-");
+  const recordings = status.recordings || {};
+  const remote = status.remote_storage || {};
+  recordingMetric.textContent = String(recordings.recordings_saved ?? 0);
+  uploadMetric.textContent = String((remote.records_uploaded ?? 0) + (remote.recordings_uploaded ?? 0));
+  if (remote.enabled) {
+    setChip(storageStatus, remote.last_error ? "storage error" : "remote storage on", remote.last_error ? "bad" : "good");
+  } else {
+    setChip(storageStatus, "remote storage off", "warn");
+  }
   if (status.last_error) {
     renderError(status.last_error);
   }
