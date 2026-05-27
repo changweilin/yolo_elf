@@ -96,8 +96,10 @@ const state = {
     suppressTap: false,
   },
   recording: {
+    id: null,
     recorder: null,
     chunks: [],
+    detections: [],
     startedAtMs: 0,
     startedAtIso: null,
     mimeType: "",
@@ -151,6 +153,10 @@ function isRecording() {
 
 function recordingSupported() {
   return typeof window.MediaRecorder === "function";
+}
+
+function detectionTransportActive() {
+  return state.liveActive || isRecording();
 }
 
 function setRecordButton() {
@@ -741,6 +747,84 @@ function recordingByteLength() {
   return state.recording.chunks.reduce((total, chunk) => total + (chunk?.size || 0), 0);
 }
 
+function createRecordingId() {
+  const stamp = new Date().toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
+  const token =
+    window.crypto?.randomUUID?.().replaceAll("-", "").slice(0, 8) ||
+    Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+  return `rec-${stamp}-${token}`;
+}
+
+function roundMetric(value, digits = 2) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return 0;
+  }
+  const factor = 10 ** digits;
+  return Math.round(number * factor) / factor;
+}
+
+function xyxyToXywh(xyxy) {
+  const [x1, y1, x2, y2] = Array.isArray(xyxy) ? xyxy.map(Number) : [0, 0, 0, 0];
+  return [
+    roundMetric(Math.min(x1, x2)),
+    roundMetric(Math.min(y1, y2)),
+    roundMetric(Math.abs(x2 - x1)),
+    roundMetric(Math.abs(y2 - y1)),
+  ];
+}
+
+function collectRecordingDetection(detection) {
+  if (!isRecording() || !detection) {
+    return;
+  }
+
+  const nowMs = performance.now();
+  const boxes = (detection.boxes || []).map((box) => ({
+    class_id: Number(box.class_id ?? 0),
+    label: String(box.label ?? box.class_id ?? ""),
+    confidence: roundMetric(box.confidence ?? 0, 4),
+    xywh: xyxyToXywh(box.xyxy),
+    xyxy: (box.xyxy || []).map((value) => roundMetric(value)),
+  }));
+
+  state.recording.detections.push({
+    frame_id: detection.frame_id ?? null,
+    recording_time_ms: Math.max(0, Math.round(nowMs - state.recording.startedAtMs)),
+    wall_time_iso: new Date().toISOString(),
+    width: Number(detection.width || 0),
+    height: Number(detection.height || 0),
+    inference_ms: roundMetric(detection.inference_ms || 0),
+    error: detection.error || "",
+    boxes,
+  });
+}
+
+function buildRecordingMetadata(recordingId, detections, durationMs, startedAtIso, mimeType, byteLength) {
+  const boxCount = detections.reduce((total, detection) => total + (detection.boxes?.length || 0), 0);
+  return {
+    source: "yolo-elf-phone",
+    schema_version: 1,
+    recording_id: recordingId,
+    started_at: startedAtIso,
+    duration_ms: durationMs,
+    storage_mode: state.recording.storageMode,
+    content_type: mimeType,
+    byte_length: byteLength,
+    capture: {
+      width: state.config.width,
+      height: state.config.height,
+      fps: requestedFps(),
+      jpeg_quality: Number(qualityInput.value || state.config.jpegQuality),
+    },
+    summary: {
+      detection_count: detections.length,
+      box_count: boxCount,
+    },
+    detections,
+  };
+}
+
 async function ensureCameraStream(reason = "camera starting") {
   if (state.stream) {
     return true;
@@ -832,8 +916,10 @@ async function startRecording() {
   const options = mimeType ? { mimeType } : undefined;
   try {
     const recorder = new MediaRecorder(state.stream, options);
+    state.recording.id = createRecordingId();
     state.recording.recorder = recorder;
     state.recording.chunks = [];
+    state.recording.detections = [];
     state.recording.startedAtMs = performance.now();
     state.recording.startedAtIso = new Date().toISOString();
     state.recording.mimeType = mimeType;
@@ -855,6 +941,10 @@ async function startRecording() {
     });
     recorder.start(1000);
     setChip(recordingStatus, "recording", "bad");
+    connectSocket();
+    if (!state.captureTimer) {
+      scheduleCapture(0);
+    }
     setRecordButton();
   } catch (error) {
     state.recording.recorder = null;
@@ -883,23 +973,30 @@ function stopRecording() {
 }
 
 function handleRecordingStop() {
+  const recordingId = state.recording.id || createRecordingId();
   const chunks = state.recording.chunks;
+  const detections = state.recording.detections;
   const startedAtIso = state.recording.startedAtIso;
   const durationMs = Math.max(0, Math.round(performance.now() - state.recording.startedAtMs));
   const mimeType = state.recording.recorder?.mimeType || state.recording.mimeType || chunks[0]?.type || "video/webm";
   const tooLarge = state.recording.tooLarge;
 
+  state.recording.id = null;
   state.recording.recorder = null;
   state.recording.chunks = [];
+  state.recording.detections = [];
   state.recording.startedAtMs = 0;
   state.recording.startedAtIso = null;
   state.recording.mimeType = "";
   state.recording.tooLarge = false;
   setRecordButton();
   if (!state.liveActive) {
+    stopDetectionTransport();
     stopMediaStream();
     setIdleVisible(true);
     setChip(cameraStatus, "camera idle", "warn");
+    setChip(socketStatus, "socket idle", "warn");
+    setChip(detectStatus, "detection idle", "warn");
   }
 
   if (tooLarge) {
@@ -912,10 +1009,34 @@ function handleRecordingStop() {
   }
 
   const blob = new Blob(chunks, { type: mimeType });
-  void uploadRecording(blob, durationMs, startedAtIso);
+  const metadata = buildRecordingMetadata(
+    recordingId,
+    detections,
+    durationMs,
+    startedAtIso,
+    mimeType,
+    blob.size,
+  );
+  void uploadRecording(blob, durationMs, startedAtIso, metadata);
 }
 
-async function uploadRecording(blob, durationMs, startedAtIso) {
+async function uploadRecordingMetadata(metadata) {
+  const response = await fetch(`/api/recordings/${encodeURIComponent(metadata.recording_id)}/metadata`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Yolo-Elf-Storage-Mode": state.recording.storageMode,
+    },
+    body: JSON.stringify(metadata),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.detail || `Recording metadata failed (${response.status})`);
+  }
+  return payload;
+}
+
+async function uploadRecording(blob, durationMs, startedAtIso, metadata) {
   if (blob.size > state.recording.maxBytes) {
     setChip(recordingStatus, "recording too large", "bad");
     return;
@@ -927,10 +1048,12 @@ async function uploadRecording(blob, durationMs, startedAtIso) {
   setChip(recordingStatus, `saving ${storageModeLabel()}`, "warn");
 
   try {
+    await uploadRecordingMetadata(metadata);
     const headers = {
       "Content-Type": blob.type || "application/octet-stream",
       "X-Yolo-Elf-Duration-Ms": String(durationMs),
       "X-Yolo-Elf-Storage-Mode": state.recording.storageMode,
+      "X-Yolo-Elf-Recording-Id": metadata.recording_id,
     };
     if (startedAtIso) {
       headers["X-Yolo-Elf-Started-At"] = startedAtIso;
@@ -978,15 +1101,12 @@ async function startCamera() {
   setCameraToggle();
   setRecordingIdleStatus();
   connectSocket();
-  scheduleCapture(0);
+  if (!state.captureTimer) {
+    scheduleCapture(0);
+  }
 }
 
-function stopCamera() {
-  if (demoMode) {
-    initializeDemoMode();
-    return;
-  }
-
+function stopDetectionTransport() {
   if (state.captureTimer) {
     clearTimeout(state.captureTimer);
     state.captureTimer = null;
@@ -999,24 +1119,41 @@ function stopCamera() {
     state.ws.close();
     state.ws = null;
   }
+}
+
+function stopCamera() {
+  if (demoMode) {
+    initializeDemoMode();
+    return;
+  }
+
   state.liveActive = false;
   if (!isRecording()) {
+    stopDetectionTransport();
     stopMediaStream();
     setIdleVisible(true);
   }
   state.latestDetection = null;
   resetPacing();
   setCameraToggle();
-  setChip(cameraStatus, state.stream ? "camera recording" : "camera idle", state.stream ? "good" : "warn");
-  setChip(socketStatus, "socket idle", "warn");
-  setChip(detectStatus, "detection idle", "warn");
+  if (isRecording()) {
+    setChip(cameraStatus, "camera recording", "good");
+    setChip(socketStatus, state.ws ? "socket connected" : "socket connecting", state.ws ? "good" : "warn");
+    setChip(detectStatus, "metadata recording", "warn");
+  } else {
+    setChip(cameraStatus, "camera idle", "warn");
+    setChip(socketStatus, "socket idle", "warn");
+    setChip(detectStatus, "detection idle", "warn");
+  }
   setRecordingIdleStatus();
   setChip(adaptiveStatus, "adaptive idle", "warn");
-  clearOverlay();
+  if (!isRecording()) {
+    clearOverlay();
+  }
 }
 
 function connectSocket() {
-  if (!state.stream || !state.liveActive) {
+  if (!state.stream || !detectionTransportActive()) {
     return;
   }
   if (state.ws && state.ws.readyState <= WebSocket.OPEN) {
@@ -1041,6 +1178,7 @@ function connectSocket() {
     }
     if (payload.type === "detection") {
       state.latestDetection = payload.detection;
+      collectRecordingDetection(payload.detection);
       const boxes = payload.detection.boxes?.length ?? 0;
       const ms = payload.detection.inference_ms ?? 0;
       if (payload.detection.error) {
@@ -1061,7 +1199,7 @@ function connectSocket() {
       return;
     }
     state.ws = null;
-    if (state.stream && state.liveActive) {
+    if (state.stream && detectionTransportActive()) {
       setChip(socketStatus, "socket offline", "bad");
       state.reconnectTimer = setTimeout(connectSocket, 1200);
     }
@@ -1116,12 +1254,16 @@ async function refreshRecordingStatus() {
 }
 
 function scheduleCapture(delay = null) {
+  if (!detectionTransportActive()) {
+    return;
+  }
   const nextDelay = delay ?? captureIntervalMs();
   state.captureTimer = setTimeout(captureFrame, nextDelay);
 }
 
 function captureFrame() {
-  if (!state.stream || !state.liveActive) {
+  state.captureTimer = null;
+  if (!state.stream || !detectionTransportActive()) {
     return;
   }
   const skipReason = frameSkipReason();
@@ -1153,7 +1295,7 @@ function captureFrame() {
   } else {
     markFrameSkipped(skipReason);
   }
-  if (state.liveActive) {
+  if (detectionTransportActive()) {
     scheduleCapture();
   }
 }

@@ -146,34 +146,70 @@ def test_viewer_receives_binary_frame_after_metadata():
 def test_recording_upload_saves_file_and_returns_download(tmp_path, monkeypatch):
     monkeypatch.setenv("RECORDING_STORAGE_DIR", str(tmp_path))
     app = create_app()
+    recording_id = "rec-test-local"
     body = b"webm-bytes"
+    metadata = {
+        "schema_version": 1,
+        "detections": [
+            {
+                "frame_id": 7,
+                "recording_time_ms": 250,
+                "wall_time_iso": "2026-05-27T08:00:00.250Z",
+                "width": 1280,
+                "height": 720,
+                "inference_ms": 18.5,
+                "boxes": [
+                    {
+                        "class_id": 2,
+                        "label": "package",
+                        "confidence": 0.91,
+                        "xywh": [10, 20, 30, 40],
+                    }
+                ],
+            }
+        ],
+    }
 
     with TestClient(app) as client:
+        metadata_response = client.post(
+            f"/api/recordings/{recording_id}/metadata",
+            json=metadata,
+            headers={"x-yolo-elf-storage-mode": "local"},
+        )
         response = client.post(
             "/api/recordings",
             content=body,
             headers={
                 "content-type": "video/webm",
+                "x-yolo-elf-recording-id": recording_id,
                 "x-yolo-elf-duration-ms": "1234",
                 "x-yolo-elf-started-at": "2026-05-27T08:00:00.000Z",
             },
         )
         payload = response.json()
         download = client.get(payload["recording"]["download_url"])
+        metadata_download = client.get(payload["recording"]["metadata_url"])
         status = client.get("/api/status").json()
 
+    assert metadata_response.status_code == 200
+    assert metadata_response.json()["metadata"]["metadata_byte_length"] > 0
     assert response.status_code == 200
     assert payload["type"] == "recording"
+    assert payload["recording"]["id"] == recording_id
     assert payload["recording"]["content_type"] == "video/webm"
     assert payload["recording"]["byte_length"] == len(body)
     assert payload["recording"]["duration_ms"] == 1234
     assert payload["recording"]["storage_mode"] == "local"
     assert payload["recording"]["local_saved"] is True
+    assert payload["recording"]["metadata_byte_length"] > 0
     assert payload["remote_storage"]["status"] == "skipped"
     assert download.status_code == 200
     assert download.content == body
+    assert metadata_download.status_code == 200
+    assert metadata_download.json()["detections"][0]["boxes"][0]["xywh"] == [10, 20, 30, 40]
     assert status["recordings"]["recordings_saved"] == 1
     assert list(tmp_path.glob("*.webm"))
+    assert list(tmp_path.glob("*.detections.json"))
 
 
 def test_recording_upload_can_be_disabled(tmp_path, monkeypatch):
@@ -204,9 +240,16 @@ def test_remote_recording_mode_requires_remote_endpoint(tmp_path, monkeypatch):
                 "x-yolo-elf-storage-mode": "remote",
             },
         )
+        metadata_response = client.post(
+            "/api/recordings/rec-test-remote/metadata",
+            json={"detections": []},
+            headers={"x-yolo-elf-storage-mode": "remote"},
+        )
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Remote recording storage is not configured"
+    assert metadata_response.status_code == 400
+    assert metadata_response.json()["detail"] == "Remote recording storage is not configured"
 
 
 def test_invalid_recording_storage_mode_is_rejected(tmp_path, monkeypatch):

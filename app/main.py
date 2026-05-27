@@ -118,10 +118,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "remote_storage": remote_result,
         }
 
+    @api.post("/api/recordings/{recording_id}/metadata")
+    async def api_recording_metadata(recording_id: str, request: Request) -> dict[str, Any]:
+        storage_mode = recording_storage_mode(
+            request.headers.get("x-yolo-elf-storage-mode")
+        )
+        wants_remote = storage_mode in {"remote", "both"}
+        if wants_remote and not remote_storage.recordings_enabled:
+            raise HTTPException(
+                status_code=400,
+                detail="Remote recording storage is not configured",
+            )
+
+        metadata = await request.json()
+        if not isinstance(metadata, dict):
+            raise HTTPException(status_code=400, detail="Recording metadata is invalid")
+
+        return {
+            "type": "recording_metadata",
+            "metadata": await recording_store.save_metadata(
+                recording_id, metadata, storage_mode
+            ),
+        }
+
     @api.get("/api/recordings/{recording_id}")
     async def api_recording(recording_id: str) -> FileResponse:
         path, media_type = recording_store.resolve(recording_id)
         return FileResponse(path, media_type=media_type, filename=path.name)
+
+    @api.get("/api/recordings/{recording_id}/metadata")
+    async def api_recording_metadata_file(recording_id: str) -> FileResponse:
+        path = recording_store.resolve_metadata(recording_id)
+        return FileResponse(path, media_type="application/json", filename=path.name)
 
     @api.websocket("/ws/camera")
     async def camera_socket(websocket: WebSocket) -> None:

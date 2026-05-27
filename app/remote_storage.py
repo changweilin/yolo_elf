@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -192,17 +193,26 @@ class RemoteStorage:
             async with self._lock:
                 self.last_attempt_at = _utc_timestamp()
             try:
-                with record.path.open("rb") as recording_file:
+                with ExitStack() as stack:
+                    recording_file = stack.enter_context(record.path.open("rb"))
+                    files = {
+                        "file": (
+                            record.filename,
+                            recording_file,
+                            record.content_type,
+                        )
+                    }
+                    if record.metadata_path is not None and record.metadata_path.exists():
+                        metadata_file = stack.enter_context(record.metadata_path.open("rb"))
+                        files["metadata"] = (
+                            record.metadata_path.name,
+                            metadata_file,
+                            "application/json",
+                        )
                     response = await client.post(
                         self.settings.remote_storage_recording_url,
                         data=self._recording_fields(record),
-                        files={
-                            "file": (
-                                record.filename,
-                                recording_file,
-                                record.content_type,
-                            )
-                        },
+                        files=files,
                         headers=self._headers(),
                     )
                 response.raise_for_status()
@@ -218,6 +228,8 @@ class RemoteStorage:
                 self.last_uploaded_at = _utc_timestamp()
             if not record.local_saved:
                 record.path.unlink(missing_ok=True)
+                if record.metadata_path is not None:
+                    record.metadata_path.unlink(missing_ok=True)
             return
 
         raise RuntimeError(last_error or "Remote recording upload failed")
@@ -250,6 +262,7 @@ class RemoteStorage:
             "byte_length": str(record.byte_length),
             "storage_mode": record.storage_mode,
             "local_saved": "1" if record.local_saved else "0",
+            "metadata_byte_length": str(_file_size(record.metadata_path)),
             "created_at": str(record.created_at),
             "created_at_iso": datetime.fromtimestamp(
                 record.created_at, timezone.utc
@@ -272,3 +285,12 @@ class RemoteStorage:
 
 def _utc_timestamp() -> float:
     return datetime.now(timezone.utc).timestamp()
+
+
+def _file_size(path) -> int:
+    if path is None:
+        return 0
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0

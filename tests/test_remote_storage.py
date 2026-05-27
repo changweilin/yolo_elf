@@ -103,6 +103,8 @@ def test_remote_storage_posts_recording_payload(monkeypatch, tmp_path):
     settings = get_settings()
     recording_path = tmp_path / "rec-test.webm"
     recording_path.write_bytes(b"webm-bytes")
+    metadata_path = tmp_path / "rec-test.detections.json"
+    metadata_path.write_text('{"detections":[{"boxes":[{"xywh":[1,2,3,4]}]}]}', encoding="utf-8")
     requests = []
 
     def handler(request):
@@ -131,6 +133,7 @@ def test_remote_storage_posts_recording_payload(monkeypatch, tmp_path):
                     created_at=1710000000.0,
                     storage_mode="both",
                     local_saved=True,
+                    metadata_path=metadata_path,
                 )
             )
             await asyncio.wait_for(storage.drain(), timeout=1)
@@ -156,7 +159,10 @@ def test_remote_storage_posts_recording_payload(monkeypatch, tmp_path):
     assert b'name="duration_ms"\r\n\r\n1200' in body
     assert b'name="storage_mode"\r\n\r\nboth' in body
     assert b'name="local_saved"\r\n\r\n1' in body
+    assert b'name="metadata_byte_length"\r\n\r\n' in body
     assert b'filename="rec-test.webm"' in body
+    assert b'filename="rec-test.detections.json"' in body
+    assert b'"xywh":[1,2,3,4]' in body
     assert b"webm-bytes" in body
 
 
@@ -166,6 +172,8 @@ def test_remote_only_recording_staging_file_is_removed_after_upload(monkeypatch,
     settings = get_settings()
     recording_path = tmp_path / "rec-test.webm"
     recording_path.write_bytes(b"webm-bytes")
+    metadata_path = tmp_path / "rec-test.detections.json"
+    metadata_path.write_text('{"detections":[]}', encoding="utf-8")
 
     def handler(_request):
         return httpx.Response(201)
@@ -192,6 +200,7 @@ def test_remote_only_recording_staging_file_is_removed_after_upload(monkeypatch,
                     created_at=1710000000.0,
                     storage_mode="remote",
                     local_saved=False,
+                    metadata_path=metadata_path,
                 )
             )
             await asyncio.wait_for(storage.drain(), timeout=1)
@@ -203,3 +212,4 @@ def test_remote_only_recording_staging_file_is_removed_after_upload(monkeypatch,
 
     assert status["recordings_uploaded"] == 1
     assert not recording_path.exists()
+    assert not metadata_path.exists()

@@ -89,7 +89,10 @@ detection frames. Recording uploads include `X-Yolo-Elf-Storage-Mode` with
 `remote`, `local`, or `both`. Local recordings are saved under
 `RECORDING_STORAGE_DIR`; remote recording uploads require
 `REMOTE_STORAGE_RECORDING_URL` and use the same bearer token from
-`REMOTE_STORAGE_TOKEN`.
+`REMOTE_STORAGE_TOKEN`. When detections are running during a recording, the
+phone page also saves a sidecar `.detections.json` file with per-frame timing,
+image dimensions, inference time, and each box's class, confidence, `xywh`, and
+source `xyxy` coordinates.
 
 ## Tests
 
