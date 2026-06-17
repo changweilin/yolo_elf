@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>YOLO Elf Phone</title>
+    <title>YOLO Elf Recorder</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
     <link rel="stylesheet" href="/static/app.css" />
@@ -19,6 +19,10 @@
 
       <header class="hud topbar">
         <div class="brand"><img src="/static/logo.svg" alt="YOLO Elf" /></div>
+        <nav class="role-switch" aria-label="Mode">
+          <a href="/recorder" aria-current="page">Recorder</a>
+          <a href="/viewer">Viewer</a>
+        </nav>
         <div class="topbar-actions">
           <div id="statusRow" class="status-row">
             <span id="cameraStatus" class="chip warn">camera idle</span>

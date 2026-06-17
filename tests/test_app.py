@@ -78,14 +78,36 @@ def test_phone_page_exposes_camera_toggle_action():
     assert 'id="stopButton"' not in response.text
 
 
-def test_viewer_links_to_phone_camera_page():
+def test_viewer_has_role_switch_and_recorder_link():
     app = create_app()
     with TestClient(app) as client:
         response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert 'href="/phone"' in response.text
-    assert "Open phone" in response.text
+    assert 'class="role-switch"' in response.text
+    assert 'href="/recorder"' in response.text
+    assert 'href="/viewer" aria-current="page"' in response.text
+    assert "Open recorder" in response.text
+
+
+def test_recorder_route_serves_capture_page():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/recorder")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert 'id="cameraToggleButton"' in response.text
+    assert 'class="role-switch"' in response.text
+    assert 'href="/viewer"' in response.text
+
+
+def test_recorder_page_marks_recorder_tab_current():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/phone")
+
+    assert 'href="/recorder" aria-current="page"' in response.text
 
 
 def test_status_includes_stream_metrics():

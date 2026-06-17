@@ -10,17 +10,15 @@ YOLO detector and viewing detection boxes in a browser.
 .\scripts\run.ps1
 ```
 
-Open the viewer:
+There are two roles, and a **Recorder / Viewer** switch in each page header lets
+any device (phone or desktop) flip between them:
 
-```text
-http://127.0.0.1:8766/viewer
-```
+- Recorder (camera + recording): `http://127.0.0.1:8766/recorder` (alias `/phone`)
+- Viewer (live frames + detection boxes): `http://127.0.0.1:8766/viewer`
 
-Open the phone camera page:
-
-```text
-http://127.0.0.1:8766/phone
-```
+Any device with a camera can be the recorder, including a desktop webcam, and
+other devices can watch it on the viewer. The server streams one recorder to all
+viewers at a time, so switching the recorder hands the camera role to that device.
 
 For camera capture from another device, use an HTTPS URL such as a Tailscale
 Serve URL. Browsers block camera access on non-local HTTP origins.

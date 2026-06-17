@@ -95,9 +95,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
+    @api.get("/recorder")
+    async def recorder() -> FileResponse:
+        # Device-neutral alias for the capture/recording page. Works on any
+        # device with a camera (phone or desktop webcam).
+        return FileResponse(
+            resolved_settings.static_dir / "phone.html",
+            headers={"Cache-Control": "no-store"},
+        )
+
     @api.get("/viewer")
     async def viewer() -> FileResponse:
-        return FileResponse(resolved_settings.static_dir / "viewer.html")
+        return FileResponse(
+            resolved_settings.static_dir / "viewer.html",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @api.get("/health")
     async def health() -> dict[str, str]:

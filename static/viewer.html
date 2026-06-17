@@ -18,6 +18,10 @@
 
       <header class="hud topbar">
         <div class="brand"><img src="/static/logo.svg" alt="YOLO Elf" /></div>
+        <nav class="role-switch" aria-label="Mode">
+          <a href="/recorder">Recorder</a>
+          <a href="/viewer" aria-current="page">Viewer</a>
+        </nav>
         <div class="topbar-actions">
           <div class="status-row">
             <span id="viewerSocketStatus" class="chip warn">viewer idle</span>
@@ -48,8 +52,8 @@
       <aside class="viewer-panel">
         <div class="panel-header">
           <span class="panel-title">Stream metrics</span>
-          <a href="/phone" target="_blank" rel="noreferrer">
-            <button type="button">Open phone</button>
+          <a href="/recorder" target="_blank" rel="noreferrer">
+            <button type="button">Open recorder</button>
           </a>
         </div>
         <div class="metric-grid">
