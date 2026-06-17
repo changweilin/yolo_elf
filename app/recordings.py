@@ -81,7 +81,7 @@ class RecordingStore:
             raise HTTPException(status_code=403, detail="Recording is disabled")
 
         storage_mode = recording_storage_mode(storage_mode)
-        local_saved = storage_mode in {"local", "both"}
+        local_saved = self._keeps_local(storage_mode)
         content_type = _clean_content_type(request.headers.get("content-type"))
         extension = _extension_for_content_type(content_type)
         duration_ms = _duration_header(request.headers.get("x-yolo-elf-duration-ms"))
@@ -152,7 +152,7 @@ class RecordingStore:
 
         recording_id = validate_recording_id(recording_id)
         storage_mode = recording_storage_mode(storage_mode)
-        local_saved = storage_mode in {"local", "both"}
+        local_saved = self._keeps_local(storage_mode)
         path = self._metadata_path(recording_id, local_saved)
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -230,6 +230,11 @@ class RecordingStore:
     async def _remember_error(self, message: str) -> None:
         async with self._lock:
             self.last_error = message
+
+    def _keeps_local(self, storage_mode: str) -> bool:
+        if storage_mode in {"local", "both"}:
+            return True
+        return self.settings.recording_keep_local_copy
 
     def _storage_dir(self, local_saved: bool) -> Path:
         if local_saved:

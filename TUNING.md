@@ -19,8 +19,8 @@ $env:YOLO_DEVICE = "0"
 可用 benchmark 快速比對 GPU 與 CPU：
 
 ```powershell
-.\scripts\bench.ps1 -Frames 20 -Warmup 3 -Device 0 -ImgSize 960 -Quality 0.85
-.\scripts\bench.ps1 -Frames 20 -Warmup 3 -Device cpu -ImgSize 960 -Quality 0.85
+.\scripts\bench.ps1 -Frames 20 -Warmup 3 -Device 0 -ImgSize 1280 -Quality 0.9
+.\scripts\bench.ps1 -Frames 20 -Warmup 3 -Device cpu -ImgSize 1280 -Quality 0.9
 ```
 
 ## 提高辨識率的優先順序
@@ -30,17 +30,37 @@ $env:YOLO_DEVICE = "0"
 3. 提高 `JPEG_QUALITY`，避免壓縮破壞細節。
 4. 降低 `CONF_THRESH` 會提高召回率，但也會增加誤判。
 
-目前預設已偏向辨識率：
+目前預設已偏向辨識率（等同下列設定，可直接執行 `.\scripts\run.ps1`）：
 
 ```powershell
-$env:CAPTURE_WIDTH = "1280"
-$env:CAPTURE_HEIGHT = "720"
-$env:JPEG_QUALITY = "0.85"
-$env:IMG_SIZE = "960"
-$env:CONF_THRESH = "0.25"
+$env:YOLO_MODEL = "yolov8s.pt"
+$env:YOLO_HALF = "1"
+$env:CAPTURE_WIDTH = "1920"
+$env:CAPTURE_HEIGHT = "1080"
+$env:JPEG_QUALITY = "0.9"
+$env:IMG_SIZE = "1280"
+$env:CONF_THRESH = "0.2"
 $env:YOLO_DEVICE = "0"
 .\scripts\run.ps1
 ```
 
 若你需要更快但可以接受漏檢，可把 `IMG_SIZE` 改回 `640`、`JPEG_QUALITY`
-改回 `0.65`。
+改回 `0.65`、模型換回 `yolov8n.pt`。
+
+## 透過 Tailscale 時的取捨
+
+辨識「在桌機」運算，Tailscale 只是把 JPEG 來回傳輸，不影響「每幀準確度」。
+但較大的擷取解析度（1920×1080）會增加每幀位元組數，在 Tailscale 走 DERP
+relay 或行動網路時可能塞滿 WebSocket buffer，使 `adaptiveFps` 自動降到 1 fps、
+丟棄影格，畫面上的框會延遲、跟不上物體（看起來像「辨識變差」，其實是過時的框）。
+
+判斷方式：
+
+- 看手機頁面的 adaptive 狀態列。若出現 `1.0 fps / cap 1.0 / buffer` 或 `/ socket`，
+  代表是網路瓶頸，不是辨識精度。
+- 用 `tailscale status` 確認是 `direct` 直連還是 `relay`（走中繼會放大延遲）。
+
+若卡頓，先降 `CAPTURE_WIDTH/HEIGHT`（例如回 1280×720）或 `JPEG_QUALITY`，
+而不是降 `IMG_SIZE`——`IMG_SIZE` 不影響傳輸量，只影響桌機端推論成本。
+
+`CONF_THRESH=0.2` 是最容易回退的旋鈕：若誤判（多餘的框）變多，先調回 `0.25`。

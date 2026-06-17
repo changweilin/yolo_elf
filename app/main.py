@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -14,6 +15,18 @@ from app.detector import DetectionError, YoloDetector, detection_error_payload
 from app.recordings import RecordingStore, recording_storage_mode
 from app.remote_storage import RemoteStorage
 from app.stream_state import CameraFrame, StreamHub
+
+
+async def _apply_camera_text(hub: StreamHub, text: str) -> bool:
+    """Handle a text frame from the phone. Returns True if it was a known message."""
+    try:
+        message = json.loads(text)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(message, dict) or message.get("type") != "client_state":
+        return False
+    await hub.set_camera_state(message.get("storage_mode"), message.get("recording"))
+    return True
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -165,6 +178,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "jpeg_quality": resolved_settings.jpeg_quality,
                     "max_frame_bytes": resolved_settings.max_frame_bytes,
                 },
+                "detector": detector.status(),
                 "recording": {
                     "enabled": resolved_settings.recording_enabled,
                     "max_bytes": resolved_settings.recording_max_bytes,
@@ -186,7 +200,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             {"type": "error", "message": str(exc), "retryable": True}
                         )
                 elif message.get("text") is not None:
-                    await websocket.send_json({"type": "pong"})
+                    if not await _apply_camera_text(hub, message["text"]):
+                        await websocket.send_json({"type": "pong"})
         except WebSocketDisconnect:
             pass
         finally:

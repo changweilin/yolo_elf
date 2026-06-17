@@ -28,6 +28,7 @@ const shutterInput = document.querySelector("#shutterInput");
 const isoInput = document.querySelector("#isoInput");
 const cameraStatus = document.querySelector("#cameraStatus");
 const socketStatus = document.querySelector("#socketStatus");
+const computeStatus = document.querySelector("#computeStatus");
 const detectStatus = document.querySelector("#detectStatus");
 const recordingStatus = document.querySelector("#recordingStatus");
 const adaptiveStatus = document.querySelector("#adaptiveStatus");
@@ -62,16 +63,17 @@ const state = {
   ws: null,
   captureTimer: null,
   reconnectTimer: null,
+  statusTimer: null,
   latestDetection: null,
   drawing: false,
   sending: false,
   liveActive: false,
   startingStream: false,
   config: {
-    width: 1280,
-    height: 720,
+    width: 1920,
+    height: 1080,
     fps: 10,
-    jpegQuality: 0.85,
+    jpegQuality: 0.9,
   },
   pacing: {
     effectiveFps: 10,
@@ -200,6 +202,7 @@ function setStorageMode(mode) {
   }
   syncStorageModeButtons();
   setRecordingIdleStatus();
+  sendClientState();
 }
 
 function syncStorageModeButtons() {
@@ -260,8 +263,8 @@ function selectedFacingMode() {
 function cameraVideoConstraints() {
   return {
     facingMode: { ideal: selectedFacingMode() },
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
+    width: { ideal: state.config.width },
+    height: { ideal: state.config.height },
     aspectRatio: { ideal: 16 / 9 },
   };
 }
@@ -695,6 +698,7 @@ function initializeDemoMode() {
   syncCameraControls();
   setChip(cameraStatus, "camera frozen", "warn");
   setChip(socketStatus, "socket offline", "warn");
+  setChip(computeStatus, "compute frozen", "warn");
   setChip(detectStatus, "demo boxes", "good");
   setChip(recordingStatus, "recording frozen", "warn");
   setChip(adaptiveStatus, "privacy mode", "warn");
@@ -942,6 +946,7 @@ async function startRecording() {
     recorder.start(1000);
     setChip(recordingStatus, "recording", "bad");
     connectSocket();
+    sendClientState();
     if (!state.captureTimer) {
       scheduleCapture(0);
     }
@@ -990,6 +995,7 @@ function handleRecordingStop() {
   state.recording.mimeType = "";
   state.recording.tooLarge = false;
   setRecordButton();
+  sendClientState();
   if (!state.liveActive) {
     stopDetectionTransport();
     stopMediaStream();
@@ -1152,6 +1158,24 @@ function stopCamera() {
   }
 }
 
+function sendClientState() {
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  try {
+    ws.send(
+      JSON.stringify({
+        type: "client_state",
+        storage_mode: state.recording.storageMode,
+        recording: isRecording(),
+      }),
+    );
+  } catch {
+    // Ignore transient send failures; the viewer refreshes state on reconnect.
+  }
+}
+
 function connectSocket() {
   if (!state.stream || !detectionTransportActive()) {
     return;
@@ -1167,6 +1191,7 @@ function connectSocket() {
 
   ws.addEventListener("open", () => {
     setChip(socketStatus, "socket connected", "good");
+    sendClientState();
   });
 
   ws.addEventListener("message", (event) => {
@@ -1174,6 +1199,7 @@ function connectSocket() {
     if (payload.type === "config") {
       applyServerConfig(payload.capture);
       applyRecordingConfig(payload.recording);
+      applyDetectorStatus(payload.detector);
       return;
     }
     if (payload.type === "detection") {
@@ -1233,23 +1259,63 @@ function applyRecordingConfig(config) {
   setRecordingIdleStatus();
 }
 
-async function refreshRecordingStatus() {
+function shortDeviceName(name) {
+  return (
+    String(name || "")
+      .replace(/NVIDIA\s+/i, "")
+      .replace(/GeForce\s+/i, "")
+      .trim() || "GPU"
+  );
+}
+
+function applyDetectorStatus(detector) {
+  if (!computeStatus) {
+    return;
+  }
+  if (!detector || detector.cuda_available === null || detector.cuda_available === undefined) {
+    setChip(computeStatus, "desktop ?", "warn");
+    return;
+  }
+
+  const device = detector.resolved_device;
+  const usingGpu =
+    device === 0 ||
+    (typeof device === "number" && device >= 0) ||
+    (typeof device === "string" && /^(cuda|\d)/.test(device.trim().toLowerCase()));
+
+  if (detector.cuda_available && usingGpu) {
+    const gpu = shortDeviceName(detector.cuda_device_name);
+    const half = detector.half ? " FP16" : "";
+    const prefix = detector.loaded ? "GPU" : "GPU ready";
+    setChip(computeStatus, `${prefix} · ${gpu}${half}`, "good");
+    return;
+  }
+  if (detector.cuda_available) {
+    setChip(computeStatus, "desktop CPU (GPU idle)", "warn");
+    return;
+  }
+  setChip(computeStatus, "desktop CPU", "warn");
+}
+
+async function pollServerStatus() {
   if (demoMode) {
     return;
   }
   try {
     const response = await fetch("/api/status", { cache: "no-store" });
-    if (!response.ok) {
-      return;
+    if (response.ok) {
+      const status = await response.json();
+      applyDetectorStatus(status.detector);
+      applyRecordingConfig({
+        enabled: status.recordings?.enabled,
+        max_bytes: status.recordings?.max_bytes,
+        remote_upload_enabled: status.remote_storage?.recording_endpoint_configured,
+      });
     }
-    const status = await response.json();
-    applyRecordingConfig({
-      enabled: status.recordings?.enabled,
-      max_bytes: status.recordings?.max_bytes,
-      remote_upload_enabled: status.remote_storage?.recording_endpoint_configured,
-    });
   } catch {
     // The WebSocket config will fill this in once live detection starts.
+  } finally {
+    state.statusTimer = setTimeout(pollServerStatus, 5000);
   }
 }
 
@@ -1269,8 +1335,19 @@ function captureFrame() {
   const skipReason = frameSkipReason();
   if (!skipReason) {
     state.sending = true;
-    capture.width = state.config.width;
-    capture.height = state.config.height;
+    // Preserve the camera's native aspect ratio. CAPTURE_WIDTH/HEIGHT act as an
+    // upper bound: we never upscale, and never stretch, so the JPEG sent to the
+    // detector is undistorted and its dimensions match the on-screen video. This
+    // keeps overlay boxes aligned with the displayed frame.
+    const sourceWidth = video.videoWidth || state.config.width;
+    const sourceHeight = video.videoHeight || state.config.height;
+    const scale = Math.min(
+      state.config.width / sourceWidth,
+      state.config.height / sourceHeight,
+      1,
+    );
+    capture.width = Math.max(1, Math.round(sourceWidth * scale));
+    capture.height = Math.max(1, Math.round(sourceHeight * scale));
     const ctx = capture.getContext("2d", { alpha: false });
     ctx.drawImage(video, 0, 0, capture.width, capture.height);
     const quality = Math.max(0.3, Math.min(0.95, Number(qualityInput.value || 0.85)));
@@ -1523,7 +1600,7 @@ restoreStorageModePreference();
 setSettingsExpanded(state.ui.settingsExpanded);
 syncCameraControls();
 setRecordingIdleStatus();
-void refreshRecordingStatus();
+void pollServerStatus();
 
 if (demoMode) {
   initializeDemoMode();

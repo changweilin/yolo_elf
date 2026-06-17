@@ -1,14 +1,19 @@
+import json
+
 import pytest
 
 pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import create_app
+from app.recordings import RecordingStore
 
 
 REMOTE_ENV = [
     "RECORDING_ENABLED",
+    "RECORDING_KEEP_LOCAL_COPY",
     "RECORDING_STORAGE_DIR",
     "RECORDING_MAX_BYTES",
     "REMOTE_STORAGE_URL",
@@ -67,7 +72,8 @@ def test_phone_page_exposes_camera_toggle_action():
     assert 'id="zoomInput"' in response.text
     assert 'id="shutterInput"' in response.text
     assert 'id="isoInput"' in response.text
-    assert "/static/phone.js?v=recording-2" in response.text
+    assert 'id="computeStatus"' in response.text
+    assert "/static/phone.js?v=gpu-status-1" in response.text
     assert "data-start-camera" not in response.text
     assert 'id="stopButton"' not in response.text
 
@@ -92,10 +98,50 @@ def test_status_includes_stream_metrics():
     assert status["process_fps"] == 0.0
     assert status["last_frame_bytes"] == 0
     assert status["avg_total_latency_ms"] == 0.0
+    assert status["camera_storage_mode"] is None
+    assert status["camera_recording"] is False
     assert status["recordings"]["enabled"] is True
     assert status["recordings"]["storage_modes"] == ["remote", "local", "both"]
     assert status["recordings"]["recordings_saved"] == 0
     assert status["remote_storage"]["enabled"] is False
+
+
+def test_camera_client_state_is_reflected_in_status():
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/camera") as camera:
+            assert camera.receive_json()["type"] == "config"
+            camera.send_text(
+                json.dumps(
+                    {"type": "client_state", "storage_mode": "both", "recording": True}
+                )
+            )
+            # Frames are processed in order, so receiving the detection guarantees
+            # the preceding client_state text was already applied.
+            camera.send_bytes(b"not a jpeg")
+            assert camera.receive_json()["type"] == "detection"
+
+            status = client.get("/api/status").json()
+            assert status["camera_connected"] is True
+            assert status["camera_storage_mode"] == "both"
+            assert status["camera_recording"] is True
+
+
+def test_remote_mode_keeps_local_copy_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECORDING_STORAGE_DIR", str(tmp_path))
+    store = RecordingStore(get_settings())
+    assert store._keeps_local("remote") is True
+    assert store._keeps_local("local") is True
+    assert store._keeps_local("both") is True
+
+
+def test_remote_mode_can_opt_out_of_local_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECORDING_STORAGE_DIR", str(tmp_path))
+    monkeypatch.setenv("RECORDING_KEEP_LOCAL_COPY", "0")
+    store = RecordingStore(get_settings())
+    assert store._keeps_local("remote") is False
+    assert store._keeps_local("local") is True
+    assert store._keeps_local("both") is True
 
 
 def test_camera_websocket_returns_detection_error_for_invalid_jpeg():

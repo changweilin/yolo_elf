@@ -23,6 +23,8 @@ class StreamHub:
         self.frame_queue: asyncio.Queue[CameraFrame] = asyncio.Queue(maxsize=1)
         self.viewer_clients: set[WebSocket] = set()
         self.camera_client: WebSocket | None = None
+        self.camera_storage_mode: str | None = None
+        self.camera_recording: bool = False
         self.started_at = time.time()
         self.frames_received = 0
         self.frames_processed = 0
@@ -44,11 +46,24 @@ class StreamHub:
     async def set_camera(self, websocket: WebSocket | None) -> None:
         async with self._lock:
             self.camera_client = websocket
+            self.camera_storage_mode = None
+            self.camera_recording = False
 
     async def clear_camera(self, websocket: WebSocket) -> None:
         async with self._lock:
             if self.camera_client is websocket:
                 self.camera_client = None
+                self.camera_storage_mode = None
+                self.camera_recording = False
+
+    async def set_camera_state(
+        self, storage_mode: str | None, recording: bool | None
+    ) -> None:
+        async with self._lock:
+            if storage_mode in {"local", "remote", "both"}:
+                self.camera_storage_mode = storage_mode
+            if recording is not None:
+                self.camera_recording = bool(recording)
 
     async def add_viewer(self, websocket: WebSocket) -> None:
         async with self._lock:
@@ -135,6 +150,8 @@ class StreamHub:
             return {
                 "uptime_sec": round(uptime_sec, 1),
                 "camera_connected": self.camera_client is not None,
+                "camera_storage_mode": self.camera_storage_mode,
+                "camera_recording": self.camera_recording,
                 "viewer_count": len(self.viewer_clients),
                 "frames_received": self.frames_received,
                 "frames_processed": self.frames_processed,

@@ -18,6 +18,7 @@ SETTINGS_ENV = [
     "JPEG_QUALITY",
     "MAX_FRAME_BYTES",
     "RECORDING_ENABLED",
+    "RECORDING_KEEP_LOCAL_COPY",
     "RECORDING_STORAGE_DIR",
     "RECORDING_MAX_BYTES",
     "REMOTE_STORAGE_URL",
@@ -40,12 +41,15 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
 
     settings = get_settings()
 
-    assert settings.conf_thresh == 0.25
-    assert settings.img_size == 960
-    assert settings.capture_width == 1280
-    assert settings.capture_height == 720
-    assert settings.jpeg_quality == 0.85
+    assert settings.yolo_model == "yolov8s.pt"
+    assert settings.yolo_half is True
+    assert settings.conf_thresh == 0.2
+    assert settings.img_size == 1280
+    assert settings.capture_width == 1920
+    assert settings.capture_height == 1080
+    assert settings.jpeg_quality == 0.9
     assert settings.recording_enabled is True
+    assert settings.recording_keep_local_copy is True
     assert settings.recording_storage_dir.name == "recordings"
     assert settings.recording_max_bytes == 250 * 1024 * 1024
 

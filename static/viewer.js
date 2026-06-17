@@ -3,6 +3,7 @@ const overlay = document.querySelector("#viewerOverlay");
 const emptyState = document.querySelector("#emptyState");
 const viewerSocketStatus = document.querySelector("#viewerSocketStatus");
 const cameraLinkStatus = document.querySelector("#cameraLinkStatus");
+const phoneStorageStatus = document.querySelector("#phoneStorageStatus");
 const modelStatus = document.querySelector("#modelStatus");
 const storageStatus = document.querySelector("#storageStatus");
 const frameMetric = document.querySelector("#frameMetric");
@@ -101,6 +102,7 @@ function connectViewer() {
 function renderDemoViewer() {
   setChip(viewerSocketStatus, "viewer demo", "warn");
   setChip(cameraLinkStatus, "phone frozen", "warn");
+  setChip(phoneStorageStatus, "storage frozen", "warn");
   setChip(modelStatus, "demo snapshot", "warn");
   setChip(storageStatus, "storage frozen", "warn");
   droppedMetric.textContent = "0";
@@ -145,12 +147,42 @@ function releaseImageUrl() {
   }
 }
 
+function storageModeLabel(mode) {
+  if (mode === "remote") {
+    return "remote";
+  }
+  if (mode === "both") {
+    return "local + remote";
+  }
+  if (mode === "local") {
+    return "local";
+  }
+  return "—";
+}
+
+function renderPhoneStorage(status) {
+  if (!phoneStorageStatus) {
+    return;
+  }
+  if (!status.camera_connected) {
+    setChip(phoneStorageStatus, "phone storage idle", "warn");
+    return;
+  }
+  const label = storageModeLabel(status.camera_storage_mode);
+  if (status.camera_recording) {
+    setChip(phoneStorageStatus, `REC · ${label}`, "bad");
+  } else {
+    setChip(phoneStorageStatus, `ready · ${label}`, "good");
+  }
+}
+
 function renderStatus(status) {
   setChip(
     cameraLinkStatus,
     status.camera_connected ? "phone connected" : "phone idle",
     status.camera_connected ? "good" : "warn",
   );
+  renderPhoneStorage(status);
   const detector = status.detector || {};
   const modelText = detector.loaded ? detector.model : "model not loaded";
   setChip(modelStatus, modelText, detector.last_load_error ? "bad" : detector.loaded ? "good" : "warn");

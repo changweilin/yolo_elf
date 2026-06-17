@@ -88,6 +88,7 @@ class Settings:
     jpeg_quality: float
     max_frame_bytes: int
     recording_enabled: bool
+    recording_keep_local_copy: bool
     recording_storage_dir: Path
     recording_max_bytes: int
     remote_storage_url: str
@@ -104,21 +105,22 @@ def get_settings() -> Settings:
     return Settings(
         host=os.getenv("HOST", "0.0.0.0"),
         port=_bounded_int_env("PORT", 8766, 1, 65535),
-        yolo_model=os.getenv("YOLO_MODEL", "yolov8n.pt"),
+        yolo_model=os.getenv("YOLO_MODEL", "yolov8s.pt"),
         yolo_device=os.getenv("YOLO_DEVICE", "auto"),
-        yolo_half=_bool_env("YOLO_HALF", False),
+        yolo_half=_bool_env("YOLO_HALF", True),
         yolo_warmup=_bool_env("YOLO_WARMUP", False),
         yolo_warmup_runs=_bounded_int_env("YOLO_WARMUP_RUNS", 1, 1, 10),
-        conf_thresh=_bounded_float_env("CONF_THRESH", 0.25, 0.0, 1.0),
-        img_size=_bounded_int_env("IMG_SIZE", 960, 32, 4096),
+        conf_thresh=_bounded_float_env("CONF_THRESH", 0.2, 0.0, 1.0),
+        img_size=_bounded_int_env("IMG_SIZE", 1280, 32, 4096),
         frame_fps=_bounded_int_env("FRAME_FPS", 10, 1, 60),
-        capture_width=_bounded_int_env("CAPTURE_WIDTH", 1280, 64, 4096),
-        capture_height=_bounded_int_env("CAPTURE_HEIGHT", 720, 64, 4096),
-        jpeg_quality=_bounded_float_env("JPEG_QUALITY", 0.85, 0.3, 0.95),
+        capture_width=_bounded_int_env("CAPTURE_WIDTH", 1920, 64, 4096),
+        capture_height=_bounded_int_env("CAPTURE_HEIGHT", 1080, 64, 4096),
+        jpeg_quality=_bounded_float_env("JPEG_QUALITY", 0.9, 0.3, 0.95),
         max_frame_bytes=_bounded_int_env(
             "MAX_FRAME_BYTES", 5 * 1024 * 1024, 64 * 1024, 50 * 1024 * 1024
         ),
         recording_enabled=_bool_env("RECORDING_ENABLED", True),
+        recording_keep_local_copy=_bool_env("RECORDING_KEEP_LOCAL_COPY", True),
         recording_storage_dir=_path_env("RECORDING_STORAGE_DIR", ROOT_DIR / "recordings"),
         recording_max_bytes=_bounded_int_env(
             "RECORDING_MAX_BYTES",

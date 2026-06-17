@@ -57,18 +57,19 @@ Common environment variables:
 
 | Name | Default | Description |
 | --- | --- | --- |
-| `YOLO_MODEL` | `yolov8n.pt` | Model path. |
+| `YOLO_MODEL` | `yolov8s.pt` | Model path. Larger models (`yolov8m.pt`/`yolov8l.pt`) are more accurate but slower. |
 | `YOLO_DEVICE` | `auto` | `auto`, `cpu`, `0`, or another Ultralytics device target. |
-| `YOLO_HALF` | `0` | Enables FP16 for supported CUDA devices. |
+| `YOLO_HALF` | `1` | Enables FP16 for supported CUDA devices (ignored on CPU). |
 | `YOLO_WARMUP` | `0` | Warms the detector during startup. |
-| `CONF_THRESH` | `0.25` | Detection confidence threshold. |
-| `IMG_SIZE` | `960` | Detector image size. |
+| `CONF_THRESH` | `0.2` | Detection confidence threshold. Lower = higher recall, more false positives. |
+| `IMG_SIZE` | `1280` | Detector image size. Higher helps small/distant objects but is slower. |
 | `FRAME_FPS` | `10` | Requested phone capture FPS. |
-| `CAPTURE_WIDTH` | `1280` | Capture width. |
-| `CAPTURE_HEIGHT` | `720` | Capture height. |
-| `JPEG_QUALITY` | `0.85` | JPEG quality sent over WebSocket. |
+| `CAPTURE_WIDTH` | `1920` | Capture width upper bound. Frames keep the camera's aspect ratio and are never upscaled or stretched. |
+| `CAPTURE_HEIGHT` | `1080` | Capture height upper bound. Frames keep the camera's aspect ratio and are never upscaled or stretched. |
+| `JPEG_QUALITY` | `0.9` | JPEG quality sent over WebSocket. |
 | `MAX_FRAME_BYTES` | `5242880` | Maximum accepted frame size. |
 | `RECORDING_ENABLED` | `1` | Enables browser recordings uploaded to the server. |
+| `RECORDING_KEEP_LOCAL_COPY` | `1` | Keeps a desktop copy even in `remote` mode. Set `0` for upload-only (no local file). |
 | `RECORDING_STORAGE_DIR` | `recordings` | Directory where uploaded recordings are saved. |
 | `RECORDING_MAX_BYTES` | `262144000` | Maximum accepted recording upload size. |
 | `REMOTE_STORAGE_URL` | empty | Optional detection metadata upload endpoint. |
@@ -87,9 +88,11 @@ Phone recording uses the browser `MediaRecorder` API. The recording button can
 open the camera stream by itself; the `Start` button only controls live
 detection frames. Recording uploads include `X-Yolo-Elf-Storage-Mode` with
 `remote`, `local`, or `both`. Local recordings are saved under
-`RECORDING_STORAGE_DIR`; remote recording uploads require
-`REMOTE_STORAGE_RECORDING_URL` and use the same bearer token from
-`REMOTE_STORAGE_TOKEN`. When detections are running during a recording, the
+`RECORDING_STORAGE_DIR`; by default a local copy is kept for every mode
+(including `remote`) unless `RECORDING_KEEP_LOCAL_COPY=0`. Remote recording
+uploads require `REMOTE_STORAGE_RECORDING_URL` and use the same bearer token
+from `REMOTE_STORAGE_TOKEN`. The desktop `/viewer` page mirrors the phone's
+live frames and shows the phone's current storage mode and recording state. When detections are running during a recording, the
 phone page also saves a sidecar `.detections.json` file with per-frame timing,
 image dimensions, inference time, and each box's class, confidence, `xywh`, and
 source `xyxy` coordinates.
