@@ -36,6 +36,9 @@ const recordButton = document.querySelector("#recordButton");
 const storageModeButtons = Array.from(
   document.querySelectorAll("[data-storage-mode]"),
 );
+const detectModeButtons = Array.from(
+  document.querySelectorAll("[data-detect-mode]"),
+);
 
 const moduleUrl = new URL(import.meta.url);
 const demoMode =
@@ -227,6 +230,45 @@ function restoreStorageModePreference() {
     // Ignore private-mode storage failures.
   }
   syncStorageModeButtons();
+}
+
+function renderDetectMode(mode) {
+  if (!mode) {
+    return;
+  }
+  for (const button of detectModeButtons) {
+    button.setAttribute(
+      "aria-pressed",
+      button.dataset.detectMode === mode ? "true" : "false",
+    );
+  }
+}
+
+async function setDetectMode(mode) {
+  if (demoMode) {
+    return;
+  }
+  renderDetectMode(mode);
+  for (const button of detectModeButtons) {
+    button.disabled = true;
+  }
+  try {
+    const response = await fetch("/api/detector/mode", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    if (response.ok) {
+      const payload = await response.json();
+      renderDetectMode(payload.detector?.mode);
+    }
+  } catch {
+    // The status poll will reconcile the buttons on the next tick.
+  } finally {
+    for (const button of detectModeButtons) {
+      button.disabled = demoMode;
+    }
+  }
 }
 
 function setIdleVisible(visible) {
@@ -704,6 +746,9 @@ function initializeDemoMode() {
   setChip(adaptiveStatus, "privacy mode", "warn");
   setRecordButton();
   syncStorageModeButtons();
+  for (const button of detectModeButtons) {
+    button.disabled = true;
+  }
   resizeOverlay();
   if (!state.drawing) {
     state.drawing = true;
@@ -1269,6 +1314,7 @@ function shortDeviceName(name) {
 }
 
 function applyDetectorStatus(detector) {
+  renderDetectMode(detector?.mode);
   if (!computeStatus) {
     return;
   }
@@ -1566,6 +1612,9 @@ if (recordButton) {
 }
 for (const button of storageModeButtons) {
   button.addEventListener("click", () => setStorageMode(button.dataset.storageMode));
+}
+for (const button of detectModeButtons) {
+  button.addEventListener("click", () => setDetectMode(button.dataset.detectMode));
 }
 if (legacyStopButton) {
   legacyStopButton.addEventListener("click", stopCamera);

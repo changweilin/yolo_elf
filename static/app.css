@@ -553,6 +553,19 @@ input[type="range"] {
   flex: 1 1 120px;
 }
 
+.detect-mode-field {
+  flex: 1 1 150px;
+}
+
+.control-field .segmented-control {
+  flex: 1 1 auto;
+}
+
+.control-field .segmented-control button {
+  flex: 1 1 0;
+  min-height: 34px;
+}
+
 #zoomValue {
   min-width: 42px;
   color: var(--text);
@@ -713,31 +726,34 @@ input[type="range"] {
     right: calc(12px + env(safe-area-inset-right));
     bottom: calc(12px + env(safe-area-inset-bottom));
     align-items: stretch;
+    gap: 8px;
+    padding: 10px;
   }
 
   .camera-control-row .primary {
     flex: 1 1 auto;
-    min-height: 56px;
-    font-size: 18px;
+    min-height: 48px;
+    font-size: 16px;
     font-weight: 800;
   }
 
   .camera-control-row {
     flex-wrap: wrap;
+    gap: 8px;
   }
 
   .controls .settings-toggle {
-    flex: 0 0 56px;
-    width: 56px;
-    min-width: 56px;
-    min-height: 56px;
+    flex: 0 0 48px;
+    width: 48px;
+    min-width: 48px;
+    min-height: 48px;
   }
 
   .controls .record-toggle {
-    flex: 0 0 56px;
-    width: 56px;
-    min-width: 56px;
-    min-height: 56px;
+    flex: 0 0 48px;
+    width: 48px;
+    min-width: 48px;
+    min-height: 48px;
   }
 
   .storage-mode {
@@ -748,14 +764,20 @@ input[type="range"] {
 
   .storage-mode button {
     flex: 1 1 0;
-    min-height: 42px;
+    min-height: 36px;
     padding: 0 8px;
   }
 
   .advanced-controls {
     flex: 1 1 100%;
     flex-wrap: wrap;
-    max-height: 220px;
+    gap: 8px;
+    max-height: 208px;
+  }
+
+  .controls input,
+  .controls select {
+    min-height: 32px;
   }
 
   .camera-shell.settings-collapsed .advanced-controls {
@@ -764,6 +786,7 @@ input[type="range"] {
 
   .control-field {
     flex: 1 1 130px;
+    gap: 6px;
     justify-content: space-between;
   }
 

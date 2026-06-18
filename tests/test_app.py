@@ -73,7 +73,10 @@ def test_phone_page_exposes_camera_toggle_action():
     assert 'id="shutterInput"' in response.text
     assert 'id="isoInput"' in response.text
     assert 'id="computeStatus"' in response.text
-    assert "/static/phone.js?v=gpu-status-1" in response.text
+    assert 'id="modeGroup"' in response.text
+    assert 'data-detect-mode="fast"' in response.text
+    assert 'data-detect-mode="accurate"' in response.text
+    assert "/static/phone.js?v=detect-mode-1" in response.text
     assert "data-start-camera" not in response.text
     assert 'id="stopButton"' not in response.text
 
