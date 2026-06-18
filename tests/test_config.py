@@ -5,7 +5,9 @@ from app.config import get_settings
 
 SETTINGS_ENV = [
     "PORT",
+    "DETECT_MODE",
     "YOLO_MODEL",
+    "YOLO_MODEL_ACCURATE",
     "YOLO_DEVICE",
     "YOLO_HALF",
     "YOLO_WARMUP",
@@ -41,7 +43,9 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
 
     settings = get_settings()
 
+    assert settings.detect_mode == "fast"
     assert settings.yolo_model == "yolov8s.pt"
+    assert settings.yolo_model_accurate == "yolov8x.pt"
     assert settings.yolo_half is True
     assert settings.conf_thresh == 0.2
     assert settings.img_size == 1280
@@ -57,6 +61,8 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
 def test_get_settings_accepts_valid_overrides(monkeypatch):
     clear_settings_env(monkeypatch)
     monkeypatch.setenv("PORT", "8767")
+    monkeypatch.setenv("DETECT_MODE", "accurate")
+    monkeypatch.setenv("YOLO_MODEL_ACCURATE", "yolo11x.pt")
     monkeypatch.setenv("YOLO_HALF", "true")
     monkeypatch.setenv("YOLO_WARMUP", "1")
     monkeypatch.setenv("YOLO_WARMUP_RUNS", "2")
@@ -76,6 +82,8 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     settings = get_settings()
 
     assert settings.port == 8767
+    assert settings.detect_mode == "accurate"
+    assert settings.yolo_model_accurate == "yolo11x.pt"
     assert settings.yolo_half is True
     assert settings.yolo_warmup is True
     assert settings.yolo_warmup_runs == 2
@@ -97,6 +105,7 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     ("name", "value"),
     [
         ("PORT", "70000"),
+        ("DETECT_MODE", "ultra"),
         ("YOLO_HALF", "maybe"),
         ("YOLO_WARMUP", "warm"),
         ("YOLO_WARMUP_RUNS", "0"),

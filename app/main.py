@@ -119,6 +119,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def api_status() -> dict[str, Any]:
         return await status_payload()
 
+    @api.post("/api/detector/mode")
+    async def api_detector_mode(request: Request) -> dict[str, Any]:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        mode = body.get("mode") if isinstance(body, dict) else None
+        try:
+            detector.set_mode(mode)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Detection mode is invalid") from exc
+        return {"type": "detector_mode", "detector": detector.status()}
+
     @api.post("/api/recordings")
     async def api_recordings(request: Request) -> dict[str, Any]:
         storage_mode = recording_storage_mode(

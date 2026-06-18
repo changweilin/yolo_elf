@@ -11,6 +11,10 @@ ULTRALYTICS_DIR = ROOT_DIR / ".ultralytics"
 os.environ.setdefault("YOLO_CONFIG_DIR", str(ULTRALYTICS_DIR))
 ULTRALYTICS_DIR.mkdir(exist_ok=True)
 
+# Detection presets the runtime can switch between. "fast" favours speed and
+# uses `yolo_model`; "accurate" swaps in the larger `yolo_model_accurate`.
+DETECT_MODES = ("fast", "accurate")
+
 
 def _int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -61,6 +65,16 @@ def _bool_env(name: str, default: bool) -> bool:
     raise ValueError(f"{name} must be a boolean, got {raw!r}")
 
 
+def _choice_env(name: str, default: str, choices: tuple[str, ...]) -> str:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    value = raw.strip().lower()
+    if value not in choices:
+        raise ValueError(f"{name} must be one of {', '.join(choices)}, got {raw!r}")
+    return value
+
+
 def _path_env(name: str, default: Path) -> Path:
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -75,7 +89,9 @@ def _path_env(name: str, default: Path) -> Path:
 class Settings:
     host: str
     port: int
+    detect_mode: str
     yolo_model: str
+    yolo_model_accurate: str
     yolo_device: str
     yolo_half: bool
     yolo_warmup: bool
@@ -105,7 +121,9 @@ def get_settings() -> Settings:
     return Settings(
         host=os.getenv("HOST", "0.0.0.0"),
         port=_bounded_int_env("PORT", 8766, 1, 65535),
+        detect_mode=_choice_env("DETECT_MODE", "fast", DETECT_MODES),
         yolo_model=os.getenv("YOLO_MODEL", "yolov8s.pt"),
+        yolo_model_accurate=os.getenv("YOLO_MODEL_ACCURATE", "yolov8x.pt"),
         yolo_device=os.getenv("YOLO_DEVICE", "auto"),
         yolo_half=_bool_env("YOLO_HALF", True),
         yolo_warmup=_bool_env("YOLO_WARMUP", False),

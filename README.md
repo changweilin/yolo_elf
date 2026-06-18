@@ -55,7 +55,9 @@ Common environment variables:
 
 | Name | Default | Description |
 | --- | --- | --- |
-| `YOLO_MODEL` | `yolov8s.pt` | Model path. Larger models (`yolov8m.pt`/`yolov8l.pt`) are more accurate but slower. |
+| `DETECT_MODE` | `fast` | Active detection preset at startup: `fast` (uses `YOLO_MODEL`) or `accurate` (uses `YOLO_MODEL_ACCURATE`). Switch at runtime from the Viewer's 快速/精準 toggle or `POST /api/detector/mode`. |
+| `YOLO_MODEL` | `yolov8s.pt` | Model for the **fast** preset. Speed-leaning default. |
+| `YOLO_MODEL_ACCURATE` | `yolov8x.pt` | Model for the **accurate** preset. Larger = more accurate but slower; auto-downloaded on first use. Try `yolo11x.pt` for the newest, highest-accuracy weights. |
 | `YOLO_DEVICE` | `auto` | `auto`, `cpu`, `0`, or another Ultralytics device target. |
 | `YOLO_HALF` | `1` | Enables FP16 for supported CUDA devices (ignored on CPU). |
 | `YOLO_WARMUP` | `0` | Warms the detector during startup. |

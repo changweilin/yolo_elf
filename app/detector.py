@@ -6,7 +6,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
-from app.config import Settings
+from app.config import DETECT_MODES, Settings
 
 
 class DetectionError(RuntimeError):
@@ -56,9 +56,12 @@ def device_supports_half(device: str | int | None) -> bool:
 class YoloDetector:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._model: Any | None = None
+        self._mode = settings.detect_mode
+        self._models: dict[str, Any] = {}
+        self._names_by_mode: dict[str, dict[int, str]] = {}
         self._names: dict[int, str] = {}
         self._device: str | int | None = None
+        self._device_resolved = False
         self._half_enabled = False
         self._warmed_up = False
         self._warmup_ms = 0.0
@@ -66,8 +69,29 @@ class YoloDetector:
         self._last_warmup_error: str | None = None
 
     @property
+    def mode(self) -> str:
+        return self._mode
+
+    @property
     def loaded(self) -> bool:
-        return self._model is not None
+        return self._models.get(self._mode) is not None
+
+    def _model_name_for_mode(self, mode: str) -> str:
+        if mode == "accurate":
+            return self.settings.yolo_model_accurate
+        return self.settings.yolo_model
+
+    def models_by_mode(self) -> dict[str, str]:
+        return {mode: self._model_name_for_mode(mode) for mode in DETECT_MODES}
+
+    def set_mode(self, mode: Any) -> str:
+        normalized = str(mode).strip().lower() if mode is not None else ""
+        if normalized not in DETECT_MODES:
+            raise ValueError(
+                f"Detection mode must be one of {', '.join(DETECT_MODES)}, got {mode!r}"
+            )
+        self._mode = normalized
+        return normalized
 
     def status(self) -> dict[str, Any]:
         cuda_available: bool | None
@@ -94,7 +118,10 @@ class YoloDetector:
             resolved_device = self._device
 
         return {
-            "model": self.settings.yolo_model,
+            "model": self._model_name_for_mode(self._mode),
+            "mode": self._mode,
+            "available_modes": list(DETECT_MODES),
+            "models": self.models_by_mode(),
             "loaded": self.loaded,
             "device": self._device,
             "resolved_device": resolved_device,
@@ -182,8 +209,11 @@ class YoloDetector:
         return DecodedImage(data=data, width=width, height=height)
 
     def _ensure_model(self) -> Any:
-        if self._model is not None:
-            return self._model
+        mode = self._mode
+        cached = self._models.get(mode)
+        if cached is not None:
+            self._names = self._names_by_mode.get(mode, {})
+            return cached
 
         try:
             import torch
@@ -192,22 +222,28 @@ class YoloDetector:
             self._load_error = f"YOLO dependencies are not installed: {exc}"
             raise DetectionError(self._load_error) from exc
 
-        self._device = self._resolve_device(torch)
-        self._half_enabled = self.settings.yolo_half and device_supports_half(self._device)
+        if not self._device_resolved:
+            self._device = self._resolve_device(torch)
+            self._half_enabled = self.settings.yolo_half and device_supports_half(self._device)
+            self._device_resolved = True
 
+        model_name = self._model_name_for_mode(mode)
         try:
-            self._model = YOLO(self.settings.yolo_model)
-            names = getattr(self._model, "names", {}) or {}
+            model = YOLO(model_name)
+            names = getattr(model, "names", {}) or {}
             if isinstance(names, dict):
-                self._names = {int(key): str(value) for key, value in names.items()}
+                resolved_names = {int(key): str(value) for key, value in names.items()}
             else:
-                self._names = {index: str(value) for index, value in enumerate(names)}
+                resolved_names = {index: str(value) for index, value in enumerate(names)}
         except Exception as exc:
-            self._load_error = f"Could not load YOLO model {self.settings.yolo_model!r}: {exc}"
+            self._load_error = f"Could not load YOLO model {model_name!r}: {exc}"
             raise DetectionError(self._load_error) from exc
 
+        self._models[mode] = model
+        self._names_by_mode[mode] = resolved_names
+        self._names = resolved_names
         self._load_error = None
-        return self._model
+        return model
 
     def _resolve_device(self, torch_module: Any) -> str | int | None:
         requested_device = self.settings.yolo_device.strip().lower()

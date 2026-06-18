@@ -90,6 +90,45 @@ def test_viewer_has_role_switch_and_recorder_link():
     assert "Open recorder" in response.text
 
 
+def test_viewer_exposes_detection_mode_switch():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'id="modeGroup"' in response.text
+    assert 'data-detect-mode="fast"' in response.text
+    assert 'data-detect-mode="accurate"' in response.text
+
+
+def test_detector_mode_can_be_switched():
+    app = create_app()
+    with TestClient(app) as client:
+        detector = client.get("/api/status").json()["detector"]
+        assert detector["available_modes"] == ["fast", "accurate"]
+        assert detector["model"] == detector["models"][detector["mode"]]
+
+        response = client.post("/api/detector/mode", json={"mode": "accurate"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["type"] == "detector_mode"
+        assert payload["detector"]["mode"] == "accurate"
+        assert payload["detector"]["model"] == payload["detector"]["models"]["accurate"]
+
+        back = client.post("/api/detector/mode", json={"mode": "fast"})
+        assert back.json()["detector"]["mode"] == "fast"
+        assert client.get("/api/status").json()["detector"]["mode"] == "fast"
+
+
+def test_detector_mode_rejects_invalid_mode():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post("/api/detector/mode", json={"mode": "ultra"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Detection mode is invalid"
+
+
 def test_recorder_route_serves_capture_page():
     app = create_app()
     with TestClient(app) as client:

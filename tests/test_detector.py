@@ -1,4 +1,41 @@
-from app.detector import clamp_xyxy, detection_error_payload, device_supports_half
+import pytest
+
+from app.config import get_settings
+from app.detector import (
+    YoloDetector,
+    clamp_xyxy,
+    detection_error_payload,
+    device_supports_half,
+)
+
+
+def _detector(monkeypatch):
+    for name in ("DETECT_MODE", "YOLO_MODEL", "YOLO_MODEL_ACCURATE"):
+        monkeypatch.delenv(name, raising=False)
+    return YoloDetector(get_settings())
+
+
+def test_detector_defaults_to_fast_mode(monkeypatch):
+    status = _detector(monkeypatch).status()
+    assert status["mode"] == "fast"
+    assert status["model"] == "yolov8s.pt"
+    assert status["available_modes"] == ["fast", "accurate"]
+    assert status["models"] == {"fast": "yolov8s.pt", "accurate": "yolov8x.pt"}
+    assert status["loaded"] is False
+
+
+def test_set_mode_switches_active_model(monkeypatch):
+    detector = _detector(monkeypatch)
+    assert detector.set_mode("accurate") == "accurate"
+    status = detector.status()
+    assert status["mode"] == "accurate"
+    assert status["model"] == "yolov8x.pt"
+
+
+def test_set_mode_rejects_unknown_mode(monkeypatch):
+    detector = _detector(monkeypatch)
+    with pytest.raises(ValueError):
+        detector.set_mode("ultra")
 
 
 def test_clamp_xyxy_keeps_boxes_inside_image():

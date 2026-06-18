@@ -56,6 +56,13 @@
             <button type="button">Open recorder</button>
           </a>
         </div>
+        <div class="panel-control">
+          <span class="panel-control-label">辨識模式</span>
+          <div id="modeGroup" class="segmented-control detect-mode" role="group" aria-label="辨識模式">
+            <button type="button" data-detect-mode="fast" aria-pressed="true" title="快速辨識（較小模型，速度優先）">快速</button>
+            <button type="button" data-detect-mode="accurate" aria-pressed="false" title="精準辨識（較大模型，準確優先）">精準</button>
+          </div>
+        </div>
         <div class="metric-grid">
           <div class="metric">
             <div class="metric-label">Frame</div>
@@ -85,6 +92,6 @@
         <div id="errorLine" class="error-line" hidden></div>
       </aside>
     </main>
-    <script type="module" src="/static/viewer.js?v=phone-storage-1"></script>
+    <script type="module" src="/static/viewer.js?v=detect-mode-1"></script>
   </body>
 </html>

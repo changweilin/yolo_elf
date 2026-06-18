@@ -23,6 +23,18 @@ $env:YOLO_DEVICE = "0"
 .\scripts\bench.ps1 -Frames 20 -Warmup 3 -Device cpu -ImgSize 1280 -Quality 0.9
 ```
 
+## 快速 / 精準模式切換
+
+不必重啟即可在兩個預設之間切換：在 Viewer 右側面板按 **快速 / 精準**，或呼叫
+`POST /api/detector/mode`（body 為 `{"mode": "fast"}` 或 `{"mode": "accurate"}`）。
+
+- **快速 (fast)**：使用 `YOLO_MODEL`（預設 `yolov8s.pt`），速度優先。
+- **精準 (accurate)**：使用 `YOLO_MODEL_ACCURATE`（預設 `yolov8x.pt`，YOLOv8 系列中最準），
+  首次切換會自動下載權重；想要最新、最高準確度可設成 `yolo11x.pt`。
+
+起始模式由 `DETECT_MODE` 決定（預設 `fast`）。切到精準模式後，下一張影格才會載入較大的模型，
+因此第一張的延遲會略高，之後維持快取不再重載。
+
 ## 提高辨識率的優先順序
 
 1. 換更大的模型，例如 `yolov8s.pt`、`yolov8m.pt`，或使用針對你的目標類別訓練的 `best.pt`。

@@ -13,6 +13,10 @@ const droppedMetric = document.querySelector("#droppedMetric");
 const recordingMetric = document.querySelector("#recordingMetric");
 const uploadMetric = document.querySelector("#uploadMetric");
 const errorLine = document.querySelector("#errorLine");
+const modeGroup = document.querySelector("#modeGroup");
+const modeButtons = modeGroup
+  ? Array.from(modeGroup.querySelectorAll("[data-detect-mode]"))
+  : [];
 
 const moduleUrl = new URL(import.meta.url);
 const demoMode =
@@ -105,6 +109,9 @@ function renderDemoViewer() {
   setChip(phoneStorageStatus, "storage frozen", "warn");
   setChip(modelStatus, "demo snapshot", "warn");
   setChip(storageStatus, "storage frozen", "warn");
+  for (const button of modeButtons) {
+    button.disabled = true;
+  }
   droppedMetric.textContent = "0";
   recordingMetric.textContent = "0";
   uploadMetric.textContent = "0";
@@ -183,9 +190,7 @@ function renderStatus(status) {
     status.camera_connected ? "good" : "warn",
   );
   renderPhoneStorage(status);
-  const detector = status.detector || {};
-  const modelText = detector.loaded ? detector.model : "model not loaded";
-  setChip(modelStatus, modelText, detector.last_load_error ? "bad" : detector.loaded ? "good" : "warn");
+  renderModel(status.detector || {});
   droppedMetric.textContent = String(status.frames_dropped ?? "-");
   const recordings = status.recordings || {};
   const remote = status.remote_storage || {};
@@ -198,6 +203,39 @@ function renderStatus(status) {
   }
   if (status.last_error) {
     renderError(status.last_error);
+  }
+}
+
+function renderModel(detector) {
+  const modelText = detector.loaded ? detector.model : "model not loaded";
+  setChip(modelStatus, modelText, detector.last_load_error ? "bad" : detector.loaded ? "good" : "warn");
+  renderDetectMode(detector.mode);
+}
+
+function renderDetectMode(mode) {
+  if (!mode) {
+    return;
+  }
+  for (const button of modeButtons) {
+    button.setAttribute("aria-pressed", button.dataset.detectMode === mode ? "true" : "false");
+  }
+}
+
+async function setDetectMode(mode) {
+  renderDetectMode(mode);
+  setChip(modelStatus, `switching to ${mode}…`, "warn");
+  try {
+    const response = await fetch("/api/detector/mode", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    if (response.ok) {
+      const payload = await response.json();
+      renderModel(payload.detector || {});
+    }
+  } catch {
+    // The status poll will reconcile the chips on the next tick.
   }
 }
 
@@ -301,6 +339,10 @@ async function pollStatus() {
 image.addEventListener("load", () => {
   emptyState.hidden = true;
 });
+
+for (const button of modeButtons) {
+  button.addEventListener("click", () => setDetectMode(button.dataset.detectMode));
+}
 
 window.addEventListener("resize", resizeOverlay);
 window.addEventListener("beforeunload", releaseImageUrl);

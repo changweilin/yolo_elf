@@ -587,6 +587,33 @@ input[type="range"] {
   font-weight: 700;
 }
 
+.panel-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel-control-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.detect-mode {
+  min-height: 36px;
+}
+
+.detect-mode button {
+  min-height: 34px;
+}
+
+.detect-mode button:disabled {
+  opacity: 0.5;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
