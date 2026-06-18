@@ -8,6 +8,7 @@ SETTINGS_ENV = [
     "DETECT_MODE",
     "YOLO_MODEL",
     "YOLO_MODEL_ACCURATE",
+    "YOLO_CLASSES",
     "YOLO_DEVICE",
     "YOLO_HALF",
     "YOLO_WARMUP",
@@ -46,6 +47,7 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
     assert settings.detect_mode == "fast"
     assert settings.yolo_model == "yolov8s.pt"
     assert settings.yolo_model_accurate == "yolov8x.pt"
+    assert settings.yolo_classes == ()
     assert settings.yolo_half is True
     assert settings.conf_thresh == 0.2
     assert settings.img_size == 1280
@@ -99,6 +101,15 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     assert settings.remote_storage_queue_size == 12
     assert settings.remote_storage_timeout == 3.5
     assert settings.remote_storage_retries == 1
+
+
+def test_yolo_classes_parses_comma_separated_prompts(monkeypatch):
+    clear_settings_env(monkeypatch)
+    monkeypatch.setenv("YOLO_CLASSES", " person, backpack ,, fire extinguisher ,")
+
+    settings = get_settings()
+
+    assert settings.yolo_classes == ("person", "backpack", "fire extinguisher")
 
 
 @pytest.mark.parametrize(

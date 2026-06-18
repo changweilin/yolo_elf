@@ -75,6 +75,13 @@ def _choice_env(name: str, default: str, choices: tuple[str, ...]) -> str:
     return value
 
 
+def _list_env(name: str) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return ()
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 def _path_env(name: str, default: Path) -> Path:
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -92,6 +99,7 @@ class Settings:
     detect_mode: str
     yolo_model: str
     yolo_model_accurate: str
+    yolo_classes: tuple[str, ...]
     yolo_device: str
     yolo_half: bool
     yolo_warmup: bool
@@ -124,6 +132,7 @@ def get_settings() -> Settings:
         detect_mode=_choice_env("DETECT_MODE", "fast", DETECT_MODES),
         yolo_model=os.getenv("YOLO_MODEL", "yolov8s.pt"),
         yolo_model_accurate=os.getenv("YOLO_MODEL_ACCURATE", "yolov8x.pt"),
+        yolo_classes=_list_env("YOLO_CLASSES"),
         yolo_device=os.getenv("YOLO_DEVICE", "auto"),
         yolo_half=_bool_env("YOLO_HALF", True),
         yolo_warmup=_bool_env("YOLO_WARMUP", False),

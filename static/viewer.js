@@ -18,6 +18,16 @@ const modeButtons = modeGroup
   ? Array.from(modeGroup.querySelectorAll("[data-detect-mode]"))
   : [];
 
+import { createModelSwitch } from "./mode-switch.js";
+
+const modelSwitch = createModelSwitch({
+  progressEl: document.querySelector("#modelSwitchProgress"),
+  fillEl: document.querySelector("#modelSwitchFill"),
+  lock(on) {
+    modeGroup?.classList.toggle("is-locked", on);
+  },
+});
+
 const moduleUrl = new URL(import.meta.url);
 const demoMode =
   window.YOLO_ELF_DEMO_MODE === true || moduleUrl.searchParams.get("demo") === "1";
@@ -223,6 +233,7 @@ function renderDetectMode(mode) {
 
 async function setDetectMode(mode) {
   renderDetectMode(mode);
+  modelSwitch.begin(mode);
   setChip(modelStatus, `switching to ${mode}…`, "warn");
   try {
     const response = await fetch("/api/detector/mode", {

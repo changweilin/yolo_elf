@@ -39,6 +39,26 @@ const storageModeButtons = Array.from(
 const detectModeButtons = Array.from(
   document.querySelectorAll("[data-detect-mode]"),
 );
+const cameraParams = document.querySelector("#cameraParams");
+const fileLoadButton = document.querySelector("#fileLoadButton");
+const fileLoadInput = document.querySelector("#fileLoadInput");
+const filePlayer = document.querySelector("#filePlayer");
+const filePlayButton = document.querySelector("#filePlayButton");
+const fileSeek = document.querySelector("#fileSeek");
+const fileTime = document.querySelector("#fileTime");
+const fileNameEl = document.querySelector("#fileName");
+const fileEjectButton = document.querySelector("#fileEjectButton");
+
+import { createModelSwitch } from "./mode-switch.js";
+
+const modelSwitch = createModelSwitch({
+  progressEl: document.querySelector("#modelSwitchProgress"),
+  fillEl: document.querySelector("#modelSwitchFill"),
+  lock(on) {
+    advancedControls?.classList.toggle("is-locked", on);
+    document.querySelector("#storageModeGroup")?.classList.toggle("is-locked", on);
+  },
+});
 
 const moduleUrl = new URL(import.meta.url);
 const demoMode =
@@ -118,6 +138,13 @@ const state = {
   ui: {
     settingsExpanded: true,
   },
+  file: {
+    active: false,
+    type: null,
+    url: null,
+    pendingFrame: false,
+    seeking: false,
+  },
 };
 
 function isLocalHostname(hostname) {
@@ -142,14 +169,21 @@ function setChip(element, text, tone) {
 function setCameraToggle({ disabled = false, label = state.liveActive ? "Stop" : "Start" } = {}) {
   for (const button of cameraActionButtons) {
     button.disabled = disabled;
-    button.textContent = label;
+    // The toggle is now an icon button: drive it through aria/title + the
+    // `.live` class (play vs. stop glyph) instead of replacing its SVG.
     button.setAttribute("aria-label", label);
+    button.title = label;
     button.setAttribute("aria-pressed", state.liveActive ? "true" : "false");
+    button.classList.toggle("live", state.liveActive);
   }
   if (legacyStopButton) {
     legacyStopButton.disabled = disabled || !state.liveActive;
   }
   setRecordButton();
+}
+
+function hasFrameSource() {
+  return Boolean(state.stream) || state.file.active;
 }
 
 function isRecording() {
@@ -161,7 +195,7 @@ function recordingSupported() {
 }
 
 function detectionTransportActive() {
-  return state.liveActive || isRecording();
+  return state.liveActive || isRecording() || state.file.active;
 }
 
 function setRecordButton() {
@@ -174,6 +208,7 @@ function setRecordButton() {
     state.recording.uploading ||
     demoMode ||
     state.startingStream ||
+    state.file.active ||
     (!recording && (!state.recording.enabled || !recordingSupported()));
   const label = recording ? "Stop recording" : "Start recording";
   recordButton.disabled = disabled;
@@ -208,13 +243,55 @@ function setStorageMode(mode) {
   sendClientState();
 }
 
+// remote / local are independent highlight toggles; the storage mode is derived
+// from which sides are lit. Both lit == "both".
+function storageFlags(mode = state.recording.storageMode) {
+  return {
+    local: mode === "local" || mode === "both",
+    remote: mode === "remote" || mode === "both",
+  };
+}
+
+function modeFromFlags(local, remote) {
+  if (local && remote) {
+    return "both";
+  }
+  if (remote) {
+    return "remote";
+  }
+  return "local";
+}
+
+function toggleStorageSide(side) {
+  if (demoMode || state.recording.uploading || isRecording()) {
+    return;
+  }
+  const flags = storageFlags();
+  if (side === "remote") {
+    flags.remote = !flags.remote;
+  } else if (side === "local") {
+    flags.local = !flags.local;
+  } else {
+    return;
+  }
+  // At least one destination must stay lit — ignore a toggle that clears both.
+  // Remote can be lit even when the server endpoint isn't configured; the
+  // ".unavailable" hint and the record-time check surface that separately, so
+  // selecting both here always works.
+  if (!flags.local && !flags.remote) {
+    return;
+  }
+  setStorageMode(modeFromFlags(flags.local, flags.remote));
+}
+
 function syncStorageModeButtons() {
+  const flags = storageFlags();
   for (const button of storageModeButtons) {
-    const mode = button.dataset.storageMode;
-    const selected = mode === state.recording.storageMode;
+    const side = button.dataset.storageMode;
+    const selected = side === "remote" ? flags.remote : flags.local;
     button.setAttribute("aria-pressed", selected ? "true" : "false");
     button.disabled = demoMode || state.recording.uploading || isRecording();
-    if (mode === "remote" || mode === "both") {
+    if (side === "remote") {
       button.classList.toggle("unavailable", !state.recording.remoteUploadEnabled);
     }
   }
@@ -249,6 +326,7 @@ async function setDetectMode(mode) {
     return;
   }
   renderDetectMode(mode);
+  modelSwitch.begin(mode);
   for (const button of detectModeButtons) {
     button.disabled = true;
   }
@@ -267,6 +345,11 @@ async function setDetectMode(mode) {
   } finally {
     for (const button of detectModeButtons) {
       button.disabled = demoMode;
+    }
+    // A loaded still/paused clip won't re-stream on its own; nudge one frame so
+    // the preview reflects the new model.
+    if (state.file.active) {
+      requestFileFrame();
     }
   }
 }
@@ -749,6 +832,9 @@ function initializeDemoMode() {
   for (const button of detectModeButtons) {
     button.disabled = true;
   }
+  if (fileLoadButton) {
+    fileLoadButton.disabled = true;
+  }
   resizeOverlay();
   if (!state.drawing) {
     state.drawing = true;
@@ -1144,6 +1230,9 @@ async function startCamera() {
     initializeDemoMode();
     return;
   }
+  if (state.file.active) {
+    exitFileMode();
+  }
 
   if (!(await ensureCameraStream("camera starting"))) {
     return;
@@ -1203,6 +1292,179 @@ function stopCamera() {
   }
 }
 
+function formatClock(seconds) {
+  const total = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function setFileMode(active) {
+  state.file.active = active;
+  cameraShell?.classList.toggle("file-mode", active);
+  if (fileLoadButton) {
+    fileLoadButton.classList.toggle("live", active);
+    fileLoadButton.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+}
+
+function syncFilePlayUi() {
+  if (!filePlayButton) {
+    return;
+  }
+  const playing =
+    state.file.active && state.file.type === "video" && !video.paused && !video.ended;
+  filePlayButton.classList.toggle("playing", playing);
+}
+
+function updateFileSeek() {
+  if (!state.file.active || state.file.type !== "video") {
+    return;
+  }
+  const duration = Number.isFinite(video.duration) ? video.duration : 0;
+  const current = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+  if (fileSeek && !state.file.seeking) {
+    fileSeek.value = duration > 0 ? String((current / duration) * 100) : "0";
+  }
+  if (fileTime) {
+    fileTime.textContent = `${formatClock(current)} / ${formatClock(duration)}`;
+  }
+}
+
+async function loadDetectionFile(file) {
+  if (demoMode || !file) {
+    return;
+  }
+  const isImage = file.type.startsWith("image/");
+  const isVideo = file.type.startsWith("video/");
+  if (!isImage && !isVideo) {
+    setChip(detectStatus, "unsupported file", "bad");
+    return;
+  }
+
+  // Hand the stage over from any live camera / recording to the loaded file.
+  if (isRecording()) {
+    stopRecording();
+  }
+  if (state.liveActive || state.stream) {
+    stopCamera();
+  }
+  if (state.file.url) {
+    URL.revokeObjectURL(state.file.url);
+    state.file.url = null;
+  }
+
+  const url = URL.createObjectURL(file);
+  state.file.url = url;
+  state.file.type = isImage ? "image" : "video";
+  state.file.pendingFrame = false;
+  state.file.seeking = false;
+  if (fileNameEl) {
+    fileNameEl.textContent = file.name || "";
+  }
+  if (filePlayer) {
+    filePlayer.classList.toggle("image-mode", isImage);
+  }
+
+  setFileMode(true);
+  setSettingsExpanded(true);
+  setIdleVisible(false);
+  setChip(cameraStatus, isImage ? "image loaded" : "video loaded", "good");
+  setChip(detectStatus, "allow detection", "warn");
+  setChip(adaptiveStatus, "file mode", "warn");
+
+  if (isImage) {
+    video.pause?.();
+    video.removeAttribute("src");
+    video.srcObject = null;
+    video.hidden = true;
+    demoFrame.src = url;
+    demoFrame.hidden = false;
+    filePlayButton?.classList.remove("playing");
+    if (fileTime) {
+      fileTime.textContent = "";
+    }
+    const requestStill = () => requestFileFrame();
+    if (demoFrame.complete && demoFrame.naturalWidth > 0) {
+      requestStill();
+    } else {
+      demoFrame.addEventListener("load", requestStill, { once: true });
+    }
+  } else {
+    demoFrame.hidden = true;
+    video.srcObject = null;
+    video.hidden = false;
+    video.loop = false;
+    video.muted = true;
+    video.controls = false;
+    video.src = url;
+    if (fileSeek) {
+      fileSeek.value = "0";
+    }
+    updateFileSeek();
+    try {
+      await video.play();
+    } catch {
+      // Autoplay can be blocked; the play button starts it on tap.
+    }
+    syncFilePlayUi();
+  }
+
+  resizeOverlay();
+  if (!state.drawing) {
+    state.drawing = true;
+    requestAnimationFrame(drawOverlay);
+  }
+  connectSocket();
+  if (!state.captureTimer) {
+    scheduleCapture(0);
+  }
+  setCameraToggle();
+  setRecordButton();
+  syncStorageModeButtons();
+}
+
+function exitFileMode() {
+  if (!state.file.active && !state.file.url) {
+    return;
+  }
+  state.file.pendingFrame = false;
+  state.file.seeking = false;
+  state.file.type = null;
+  setFileMode(false);
+  stopDetectionTransport();
+  state.latestDetection = null;
+
+  if (video) {
+    video.pause?.();
+    video.removeAttribute("src");
+    video.srcObject = null;
+    video.hidden = true;
+    video.load?.();
+  }
+  if (demoFrame) {
+    demoFrame.hidden = true;
+    demoFrame.removeAttribute("src");
+  }
+  if (state.file.url) {
+    URL.revokeObjectURL(state.file.url);
+    state.file.url = null;
+  }
+  if (fileLoadInput) {
+    fileLoadInput.value = "";
+  }
+  filePlayButton?.classList.remove("playing");
+
+  clearOverlay();
+  setIdleVisible(true);
+  setChip(cameraStatus, "camera idle", "warn");
+  setChip(socketStatus, "socket idle", "warn");
+  setChip(detectStatus, "detection idle", "warn");
+  setChip(adaptiveStatus, "adaptive idle", "warn");
+  setCameraToggle();
+  setRecordingIdleStatus();
+}
+
 function sendClientState() {
   const ws = state.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -1222,7 +1484,7 @@ function sendClientState() {
 }
 
 function connectSocket() {
-  if (!state.stream || !detectionTransportActive()) {
+  if (!hasFrameSource() || !detectionTransportActive()) {
     return;
   }
   if (state.ws && state.ws.readyState <= WebSocket.OPEN) {
@@ -1270,7 +1532,7 @@ function connectSocket() {
       return;
     }
     state.ws = null;
-    if (state.stream && detectionTransportActive()) {
+    if (hasFrameSource() && detectionTransportActive()) {
       setChip(socketStatus, "socket offline", "bad");
       state.reconnectTimer = setTimeout(connectSocket, 1200);
     }
@@ -1373,50 +1635,95 @@ function scheduleCapture(delay = null) {
   state.captureTimer = setTimeout(captureFrame, nextDelay);
 }
 
-function captureFrame() {
-  state.captureTimer = null;
-  if (!state.stream || !detectionTransportActive()) {
+// The drawable backing the current frame. Live camera and loaded video clips
+// draw from <video>; a loaded still image draws from the <img> stage element.
+function activeFrameSource() {
+  if (state.file.active && state.file.type === "image") {
+    return {
+      el: demoFrame,
+      width: demoFrame.naturalWidth,
+      height: demoFrame.naturalHeight,
+      ready: demoFrame.complete && demoFrame.naturalWidth > 0,
+    };
+  }
+  return {
+    el: video,
+    width: video.videoWidth,
+    height: video.videoHeight,
+    ready: video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA,
+  };
+}
+
+// True when frames should flow on the capture timer. A paused clip or a still
+// only sends on demand (see requestFileFrame), so detection still updates when
+// you scrub or switch models without re-streaming every tick.
+function shouldStreamContinuously() {
+  if (state.file.active) {
+    return state.file.type === "video" && !video.paused && !video.ended;
+  }
+  return state.liveActive || isRecording();
+}
+
+function requestFileFrame() {
+  state.file.pendingFrame = true;
+}
+
+function sendFrameFromSource() {
+  const source = activeFrameSource();
+  if (!source.ready || !source.width || !source.height) {
+    markFrameSkipped("video");
     return;
   }
-  const skipReason = frameSkipReason();
-  if (!skipReason) {
-    state.sending = true;
-    // Preserve the camera's native aspect ratio. CAPTURE_WIDTH/HEIGHT act as an
-    // upper bound: we never upscale, and never stretch, so the JPEG sent to the
-    // detector is undistorted and its dimensions match the on-screen video. This
-    // keeps overlay boxes aligned with the displayed frame.
-    const sourceWidth = video.videoWidth || state.config.width;
-    const sourceHeight = video.videoHeight || state.config.height;
-    const scale = Math.min(
-      state.config.width / sourceWidth,
-      state.config.height / sourceHeight,
-      1,
-    );
-    capture.width = Math.max(1, Math.round(sourceWidth * scale));
-    capture.height = Math.max(1, Math.round(sourceHeight * scale));
-    const ctx = capture.getContext("2d", { alpha: false });
-    ctx.drawImage(video, 0, 0, capture.width, capture.height);
-    const quality = Math.max(0.3, Math.min(0.95, Number(qualityInput.value || 0.85)));
-    capture.toBlob(
-      async (blob) => {
-        try {
-          if (blob && state.ws && state.ws.readyState === WebSocket.OPEN) {
-            const bytes = await blob.arrayBuffer();
-            state.ws.send(bytes);
-            markFrameSent(bytes.byteLength);
-          }
-          if (!blob) {
-            markFrameSkipped("encode");
-          }
-        } finally {
-          state.sending = false;
+  state.sending = true;
+  // Preserve the source's native aspect ratio. CAPTURE_WIDTH/HEIGHT act as an
+  // upper bound: we never upscale, and never stretch, so the JPEG sent to the
+  // detector is undistorted and its dimensions match the on-screen frame. This
+  // keeps overlay boxes aligned with the displayed image.
+  const scale = Math.min(
+    state.config.width / source.width,
+    state.config.height / source.height,
+    1,
+  );
+  capture.width = Math.max(1, Math.round(source.width * scale));
+  capture.height = Math.max(1, Math.round(source.height * scale));
+  const ctx = capture.getContext("2d", { alpha: false });
+  ctx.drawImage(source.el, 0, 0, capture.width, capture.height);
+  const quality = Math.max(0.3, Math.min(0.95, Number(qualityInput.value || 0.85)));
+  capture.toBlob(
+    async (blob) => {
+      try {
+        if (blob && state.ws && state.ws.readyState === WebSocket.OPEN) {
+          const bytes = await blob.arrayBuffer();
+          state.ws.send(bytes);
+          markFrameSent(bytes.byteLength);
         }
-      },
-      "image/jpeg",
-      quality,
-    );
-  } else {
-    markFrameSkipped(skipReason);
+        if (!blob) {
+          markFrameSkipped("encode");
+        }
+      } finally {
+        state.sending = false;
+      }
+    },
+    "image/jpeg",
+    quality,
+  );
+}
+
+function captureFrame() {
+  state.captureTimer = null;
+  if (!hasFrameSource() || !detectionTransportActive()) {
+    return;
+  }
+  if (shouldStreamContinuously()) {
+    const skipReason = frameSkipReason();
+    if (!skipReason) {
+      sendFrameFromSource();
+    } else {
+      markFrameSkipped(skipReason);
+    }
+  } else if (state.file.pendingFrame && !frameSkipReason()) {
+    state.file.pendingFrame = false;
+    sendFrameFromSource();
   }
   if (detectionTransportActive()) {
     scheduleCapture();
@@ -1457,7 +1764,7 @@ function frameSkipReason() {
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
     return "socket";
   }
-  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+  if (!activeFrameSource().ready) {
     return "video";
   }
   if (state.ws.bufferedAmount >= MAX_BUFFERED_BYTES) {
@@ -1611,11 +1918,74 @@ if (recordButton) {
   recordButton.addEventListener("click", toggleRecording);
 }
 for (const button of storageModeButtons) {
-  button.addEventListener("click", () => setStorageMode(button.dataset.storageMode));
+  button.addEventListener("click", () => toggleStorageSide(button.dataset.storageMode));
 }
 for (const button of detectModeButtons) {
   button.addEventListener("click", () => setDetectMode(button.dataset.detectMode));
 }
+if (fileLoadButton && fileLoadInput) {
+  fileLoadButton.addEventListener("click", () => fileLoadInput.click());
+  fileLoadInput.addEventListener("change", () => {
+    const file = fileLoadInput.files?.[0];
+    if (file) {
+      void loadDetectionFile(file);
+    }
+  });
+}
+if (fileEjectButton) {
+  fileEjectButton.addEventListener("click", exitFileMode);
+}
+if (filePlayButton) {
+  filePlayButton.addEventListener("click", () => {
+    if (!state.file.active || state.file.type !== "video") {
+      return;
+    }
+    if (video.paused || video.ended) {
+      void video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  });
+}
+if (fileSeek) {
+  fileSeek.addEventListener("pointerdown", () => {
+    state.file.seeking = true;
+  });
+  const endSeek = () => {
+    state.file.seeking = false;
+  };
+  fileSeek.addEventListener("pointerup", endSeek);
+  fileSeek.addEventListener("pointercancel", endSeek);
+  fileSeek.addEventListener("input", () => {
+    if (!state.file.active || state.file.type !== "video") {
+      return;
+    }
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    if (duration > 0) {
+      video.currentTime = (Number(fileSeek.value) / 100) * duration;
+    }
+  });
+}
+video.addEventListener("play", syncFilePlayUi);
+video.addEventListener("pause", () => {
+  syncFilePlayUi();
+  if (state.file.active && state.file.type === "video") {
+    requestFileFrame();
+  }
+});
+video.addEventListener("ended", () => {
+  syncFilePlayUi();
+  if (state.file.active && state.file.type === "video") {
+    requestFileFrame();
+  }
+});
+video.addEventListener("seeked", () => {
+  if (state.file.active && state.file.type === "video") {
+    requestFileFrame();
+  }
+});
+video.addEventListener("loadedmetadata", updateFileSeek);
+video.addEventListener("timeupdate", updateFileSeek);
 if (legacyStopButton) {
   legacyStopButton.addEventListener("click", stopCamera);
 }

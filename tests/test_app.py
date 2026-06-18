@@ -62,7 +62,11 @@ def test_phone_page_exposes_camera_toggle_action():
     assert 'id="storageModeGroup"' in response.text
     assert 'data-storage-mode="local"' in response.text
     assert 'data-storage-mode="remote"' in response.text
-    assert 'data-storage-mode="both"' in response.text
+    # remote/local are independent highlight toggles now; "both" is the derived
+    # state when both are lit, so there is no dedicated "both" button.
+    assert 'data-storage-mode="both"' not in response.text
+    assert 'id="fileLoadInput"' in response.text
+    assert 'id="filePlayer"' in response.text
     assert 'id="settingsToggleButton"' in response.text
     assert 'id="advancedControls"' in response.text
     assert 'id="statusRow"' in response.text
@@ -76,7 +80,7 @@ def test_phone_page_exposes_camera_toggle_action():
     assert 'id="modeGroup"' in response.text
     assert 'data-detect-mode="fast"' in response.text
     assert 'data-detect-mode="accurate"' in response.text
-    assert "/static/phone.js?v=detect-mode-1" in response.text
+    assert "/static/phone.js?v=file-detect-2" in response.text
     assert "data-start-camera" not in response.text
     assert 'id="stopButton"' not in response.text
 
@@ -130,6 +134,55 @@ def test_detector_mode_rejects_invalid_mode():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Detection mode is invalid"
+
+
+def test_settings_page_loads():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/settings")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert 'id="settingsForm"' in response.text
+    assert 'class="role-switch"' in response.text
+
+
+def test_detector_config_round_trip():
+    app = create_app()
+    with TestClient(app) as client:
+        current = client.get("/api/detector/config").json()
+        assert current["type"] == "detector_config"
+
+        response = client.post(
+            "/api/detector/config",
+            json={
+                "mode": "accurate",
+                "fast_model": "yolo11n.pt",
+                "accurate_model": "yolo11x.pt",
+                "classes": "person, dog",
+                "conf_thresh": 0.4,
+                "img_size": 960,
+            },
+        )
+        assert response.status_code == 200
+        detector = response.json()["detector"]
+        assert detector["mode"] == "accurate"
+        assert detector["models"] == {"fast": "yolo11n.pt", "accurate": "yolo11x.pt"}
+        assert detector["configured_classes"] == ["person", "dog"]
+        assert detector["conf_thresh"] == 0.4
+        assert detector["img_size"] == 960
+
+        # Changes persist for later reads of the shared detector.
+        assert client.get("/api/status").json()["detector"]["img_size"] == 960
+
+
+def test_detector_config_rejects_invalid_values():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post("/api/detector/config", json={"conf_thresh": 2})
+
+    assert response.status_code == 400
+    assert "conf_thresh" in response.json()["detail"]
 
 
 def test_recorder_route_serves_capture_page():

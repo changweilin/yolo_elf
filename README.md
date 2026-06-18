@@ -10,11 +10,18 @@ YOLO detector and viewing detection boxes in a browser.
 .\scripts\run.ps1
 ```
 
-There are two roles, and a **Recorder / Viewer** switch in each page header lets
-any device (phone or desktop) flip between them:
+There are three pages, and a **Recorder / Viewer / Settings** switch in each page
+header lets any device flip between them:
 
 - Recorder (camera + recording): `http://127.0.0.1:8766/recorder` (alias `/phone`)
 - Viewer (live frames + detection boxes): `http://127.0.0.1:8766/viewer`
+- Settings (model / classes / thresholds, applied live): `http://127.0.0.1:8766/settings`
+
+The Settings page edits the detector at runtime without a restart. To bake values
+in at launch instead, pass `run.ps1` parameters (`-DetectMode`, `-FastModel`,
+`-AccurateModel`, `-Classes`, `-ConfThresh`, `-ImgSize`) or the env vars below.
+Runtime edits reset to the env/default values when the server restarts. See
+`TUNING.md` for the full workflow.
 
 Any device with a camera can be the recorder, including a desktop webcam, and
 other devices can watch it on the viewer. The server streams one recorder to all
@@ -57,7 +64,8 @@ Common environment variables:
 | --- | --- | --- |
 | `DETECT_MODE` | `fast` | Active detection preset at startup: `fast` (uses `YOLO_MODEL`) or `accurate` (uses `YOLO_MODEL_ACCURATE`). Switch at runtime from the Viewer's 快速/精準 toggle or `POST /api/detector/mode`. |
 | `YOLO_MODEL` | `yolov8s.pt` | Model for the **fast** preset. Speed-leaning default. |
-| `YOLO_MODEL_ACCURATE` | `yolov8x.pt` | Model for the **accurate** preset. Larger = more accurate but slower; auto-downloaded on first use. Try `yolo11x.pt` for the newest, highest-accuracy weights. |
+| `YOLO_MODEL_ACCURATE` | `yolov8x.pt` | Model for the **accurate** preset. Larger = more accurate but slower; auto-downloaded on first use. Try `yolo11x.pt` for the newest, highest-accuracy weights, or `yolov8x-oiv7.pt` for the Open Images V7 vocabulary (600 classes instead of COCO's 80). |
+| `YOLO_CLASSES` | _(empty)_ | Comma-separated prompt classes for open-vocabulary models (YOLO-World / YOLOE). Empty keeps the model's built-in vocabulary. Requires a `-world`/`-worldv2` model (set `YOLO_MODEL`/`YOLO_MODEL_ACCURATE` to e.g. `yolov8x-worldv2.pt`); ignored by closed-set detectors. Example: `person,backpack,fire extinguisher`. |
 | `YOLO_DEVICE` | `auto` | `auto`, `cpu`, `0`, or another Ultralytics device target. |
 | `YOLO_HALF` | `1` | Enables FP16 for supported CUDA devices (ignored on CPU). |
 | `YOLO_WARMUP` | `0` | Warms the detector during startup. |

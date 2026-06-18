@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import threading
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -57,8 +58,21 @@ class YoloDetector:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._mode = settings.detect_mode
+        # Runtime-mutable detector config (seeded from settings, then editable via
+        # update_config / the settings page without restarting the server).
+        self._model_names: dict[str, str] = {
+            "fast": settings.yolo_model,
+            "accurate": settings.yolo_model_accurate,
+        }
+        self._classes: tuple[str, ...] = settings.yolo_classes
+        self._conf_thresh: float = settings.conf_thresh
+        self._img_size: int = settings.img_size
         self._models: dict[str, Any] = {}
+        # Guards model loading so a background preload (triggered by a mode
+        # switch) and the detection worker never load the same weights twice.
+        self._load_lock = threading.Lock()
         self._names_by_mode: dict[str, dict[int, str]] = {}
+        self._open_vocab_applied: dict[str, bool] = {}
         self._names: dict[int, str] = {}
         self._device: str | int | None = None
         self._device_resolved = False
@@ -77,9 +91,7 @@ class YoloDetector:
         return self._models.get(self._mode) is not None
 
     def _model_name_for_mode(self, mode: str) -> str:
-        if mode == "accurate":
-            return self.settings.yolo_model_accurate
-        return self.settings.yolo_model
+        return self._model_names.get(mode, self._model_names["fast"])
 
     def models_by_mode(self) -> dict[str, str]:
         return {mode: self._model_name_for_mode(mode) for mode in DETECT_MODES}
@@ -92,6 +104,89 @@ class YoloDetector:
             )
         self._mode = normalized
         return normalized
+
+    def update_config(self, payload: Any) -> dict[str, Any]:
+        """Apply a partial detector config at runtime. Returns the new status.
+
+        Only the keys present in ``payload`` are changed. Swapping a model name
+        drops that preset's cached weights so the new model loads on the next
+        frame; changing classes is re-applied to any already-loaded open-vocab
+        model. Raises ``ValueError`` for invalid values.
+        """
+        if not isinstance(payload, dict):
+            raise ValueError("Detector config must be an object")
+
+        if payload.get("mode") is not None:
+            self.set_mode(payload["mode"])
+        if payload.get("conf_thresh") is not None:
+            self._conf_thresh = self._validate_conf_thresh(payload["conf_thresh"])
+        if payload.get("img_size") is not None:
+            self._img_size = self._validate_img_size(payload["img_size"])
+        if payload.get("fast_model") is not None:
+            self._set_model_name("fast", payload["fast_model"])
+        if payload.get("accurate_model") is not None:
+            self._set_model_name("accurate", payload["accurate_model"])
+        if payload.get("classes") is not None:
+            self._set_classes(payload["classes"])
+
+        return self.status()
+
+    @staticmethod
+    def _validate_conf_thresh(value: Any) -> float:
+        try:
+            conf = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("conf_thresh must be a number") from exc
+        if not 0.0 <= conf <= 1.0:
+            raise ValueError("conf_thresh must be between 0.0 and 1.0")
+        return conf
+
+    @staticmethod
+    def _validate_img_size(value: Any) -> int:
+        try:
+            size = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("img_size must be an integer") from exc
+        if not 32 <= size <= 4096:
+            raise ValueError("img_size must be between 32 and 4096")
+        return size
+
+    def _set_model_name(self, mode: str, name: Any) -> None:
+        resolved = str(name).strip()
+        if not resolved:
+            raise ValueError(f"{mode} model name must not be empty")
+        if resolved == self._model_names.get(mode):
+            return
+        self._model_names[mode] = resolved
+        # Drop cached state so the new weights load on the next frame.
+        self._models.pop(mode, None)
+        self._names_by_mode.pop(mode, None)
+        self._open_vocab_applied.pop(mode, None)
+
+    def _set_classes(self, classes: Any) -> None:
+        if isinstance(classes, str):
+            parsed = tuple(item.strip() for item in classes.split(",") if item.strip())
+        elif isinstance(classes, (list, tuple)):
+            parsed = tuple(str(item).strip() for item in classes if str(item).strip())
+        else:
+            raise ValueError("classes must be a list or comma-separated string")
+        self._classes = parsed
+        self._reapply_open_vocabulary()
+
+    def _reapply_open_vocabulary(self) -> None:
+        for mode, model in self._models.items():
+            applied = self._apply_open_vocabulary(model)
+            self._open_vocab_applied[mode] = applied
+            if not applied:
+                continue
+            names = getattr(model, "names", {}) or {}
+            if isinstance(names, dict):
+                resolved = {int(key): str(value) for key, value in names.items()}
+            else:
+                resolved = {index: str(value) for index, value in enumerate(names)}
+            self._names_by_mode[mode] = resolved
+            if mode == self._mode:
+                self._names = resolved
 
     def status(self) -> dict[str, Any]:
         cuda_available: bool | None
@@ -122,6 +217,8 @@ class YoloDetector:
             "mode": self._mode,
             "available_modes": list(DETECT_MODES),
             "models": self.models_by_mode(),
+            "configured_classes": list(self._classes),
+            "open_vocabulary": self._open_vocab_applied.get(self._mode, False),
             "loaded": self.loaded,
             "device": self._device,
             "resolved_device": resolved_device,
@@ -132,8 +229,8 @@ class YoloDetector:
             "warmup_runs": self.settings.yolo_warmup_runs,
             "warmed_up": self._warmed_up,
             "warmup_ms": self._warmup_ms,
-            "conf_thresh": self.settings.conf_thresh,
-            "img_size": self.settings.img_size,
+            "conf_thresh": self._conf_thresh,
+            "img_size": self._img_size,
             "cuda_available": cuda_available,
             "cuda_device_count": cuda_device_count,
             "cuda_device_name": cuda_device_name,
@@ -172,7 +269,7 @@ class YoloDetector:
             import numpy as np
 
             model = self._ensure_model()
-            warmup_size = min(max(self.settings.img_size, 32), 1280)
+            warmup_size = min(max(self._img_size, 32), 1280)
             source = np.zeros((warmup_size, warmup_size, 3), dtype=np.uint8)
             for _ in range(self.settings.yolo_warmup_runs):
                 self._predict(model, source)
@@ -208,6 +305,20 @@ class YoloDetector:
 
         return DecodedImage(data=data, width=width, height=height)
 
+    def preload(self) -> dict[str, Any]:
+        """Eagerly load the current mode's weights so ``status().loaded`` flips.
+
+        Called in a background thread after a mode switch so the UI progress bar
+        can poll ``/api/status`` and tell when the new model is ready, even when
+        no frames are streaming. Load failures are recorded in ``last_load_error``
+        and swallowed so the caller never has to handle an exception.
+        """
+        try:
+            self._ensure_model()
+        except Exception:  # noqa: BLE001 - reported via last_load_error
+            pass
+        return self.status()
+
     def _ensure_model(self) -> Any:
         mode = self._mode
         cached = self._models.get(mode)
@@ -215,35 +326,61 @@ class YoloDetector:
             self._names = self._names_by_mode.get(mode, {})
             return cached
 
-        try:
-            import torch
-            from ultralytics import YOLO
-        except Exception as exc:
-            self._load_error = f"YOLO dependencies are not installed: {exc}"
-            raise DetectionError(self._load_error) from exc
+        with self._load_lock:
+            # Re-check under the lock: a concurrent loader may have finished
+            # while we were waiting, so we never build the same model twice.
+            cached = self._models.get(mode)
+            if cached is not None:
+                self._names = self._names_by_mode.get(mode, {})
+                return cached
 
-        if not self._device_resolved:
-            self._device = self._resolve_device(torch)
-            self._half_enabled = self.settings.yolo_half and device_supports_half(self._device)
-            self._device_resolved = True
+            try:
+                import torch
+                from ultralytics import YOLO
+            except Exception as exc:
+                self._load_error = f"YOLO dependencies are not installed: {exc}"
+                raise DetectionError(self._load_error) from exc
 
-        model_name = self._model_name_for_mode(mode)
-        try:
-            model = YOLO(model_name)
-            names = getattr(model, "names", {}) or {}
-            if isinstance(names, dict):
-                resolved_names = {int(key): str(value) for key, value in names.items()}
-            else:
-                resolved_names = {index: str(value) for index, value in enumerate(names)}
-        except Exception as exc:
-            self._load_error = f"Could not load YOLO model {model_name!r}: {exc}"
-            raise DetectionError(self._load_error) from exc
+            if not self._device_resolved:
+                self._device = self._resolve_device(torch)
+                self._half_enabled = self.settings.yolo_half and device_supports_half(self._device)
+                self._device_resolved = True
 
-        self._models[mode] = model
-        self._names_by_mode[mode] = resolved_names
-        self._names = resolved_names
-        self._load_error = None
-        return model
+            model_name = self._model_name_for_mode(mode)
+            try:
+                model = YOLO(model_name)
+                applied = self._apply_open_vocabulary(model)
+                names = getattr(model, "names", {}) or {}
+                if isinstance(names, dict):
+                    resolved_names = {int(key): str(value) for key, value in names.items()}
+                else:
+                    resolved_names = {index: str(value) for index, value in enumerate(names)}
+            except Exception as exc:
+                self._load_error = f"Could not load YOLO model {model_name!r}: {exc}"
+                raise DetectionError(self._load_error) from exc
+
+            self._models[mode] = model
+            self._names_by_mode[mode] = resolved_names
+            self._open_vocab_applied[mode] = applied
+            self._names = resolved_names
+            self._load_error = None
+            return model
+
+    def _apply_open_vocabulary(self, model: Any) -> bool:
+        """Set custom prompt classes on open-vocabulary models (YOLO-World/YOLOE).
+
+        Returns True when the configured ``YOLO_CLASSES`` were applied. Closed-set
+        models (plain COCO/Open Images detectors) lack ``set_classes`` and keep
+        their built-in vocabulary unchanged.
+        """
+        classes = self._classes
+        if not classes:
+            return False
+        set_classes = getattr(model, "set_classes", None)
+        if not callable(set_classes):
+            return False
+        set_classes(list(classes))
+        return True
 
     def _resolve_device(self, torch_module: Any) -> str | int | None:
         requested_device = self.settings.yolo_device.strip().lower()
@@ -256,8 +393,8 @@ class YoloDetector:
     def _prediction_kwargs(self, source: Any) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "source": source,
-            "imgsz": self.settings.img_size,
-            "conf": self.settings.conf_thresh,
+            "imgsz": self._img_size,
+            "conf": self._conf_thresh,
             "verbose": False,
         }
         if self._device is not None:

@@ -6,7 +6,7 @@
     <title>YOLO Elf Recorder</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="/static/app.css" />
+    <link rel="stylesheet" href="/static/app.css?v=ui-3" />
   </head>
   <body>
     <main class="camera-shell">
@@ -20,8 +20,24 @@
       <header class="hud topbar">
         <div class="brand"><img src="/static/logo.svg" alt="YOLO Elf" /></div>
         <nav class="role-switch" aria-label="Mode">
-          <a href="/recorder" aria-current="page">Recorder</a>
-          <a href="/viewer">Viewer</a>
+          <a href="/recorder" aria-current="page" aria-label="Recorder" title="Recorder">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+              <circle cx="12" cy="13" r="4"></circle>
+            </svg>
+          </a>
+          <a href="/viewer" aria-label="Viewer" title="Viewer">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </a>
+          <a href="/settings" aria-label="Settings" title="Settings">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </a>
         </nav>
         <div class="topbar-actions">
           <div id="statusRow" class="status-row">
@@ -52,9 +68,69 @@
       </header>
 
       <section class="hud controls">
+        <div id="modelSwitchProgress" class="switch-progress" role="status" aria-live="polite">
+          <span class="switch-label">切換模型中…</span>
+          <div class="progress-track"><div id="modelSwitchFill" class="progress-fill"></div></div>
+        </div>
         <div class="camera-control-row">
-          <button id="cameraToggleButton" class="primary" type="button">
-            Start
+          <button
+            id="fileLoadButton"
+            class="icon-button file-load-button"
+            type="button"
+            aria-label="載入影片或圖片辨識"
+            title="載入影片或圖片辨識"
+          >
+            <svg class="control-icon" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <path d="M7 9l5-5 5 5"></path>
+              <path d="M12 4v12"></path>
+            </svg>
+          </button>
+          <input id="fileLoadInput" type="file" accept="video/*,image/*" hidden />
+          <div id="storageModeGroup" class="storage-toggles" role="group" aria-label="Recording storage">
+            <button
+              type="button"
+              class="icon-button storage-toggle"
+              data-storage-mode="remote"
+              aria-pressed="false"
+              aria-label="Remote 雲端儲存"
+              title="Remote 雲端儲存"
+            >
+              <svg class="control-icon" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                <path d="M20 17.58A5 5 0 0 0 18 8h-1.26A8 8 0 1 0 4 16.25"></path>
+                <path d="M12 12v9"></path>
+                <path d="m8 17 4-4 4 4"></path>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="icon-button storage-toggle"
+              data-storage-mode="local"
+              aria-pressed="true"
+              aria-label="Local 本機儲存"
+              title="Local 本機儲存"
+            >
+              <svg class="control-icon" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
+            </button>
+          </div>
+          <button
+            id="cameraToggleButton"
+            class="icon-button camera-toggle"
+            type="button"
+            aria-label="Start"
+            aria-pressed="false"
+            title="Start"
+          >
+            <svg class="control-icon camera-icon-start" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <path d="M8 5v14l11-7z"></path>
+            </svg>
+            <svg class="control-icon camera-icon-stop" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <rect x="7" y="7" width="10" height="10" rx="1"></rect>
+            </svg>
           </button>
           <button
             id="recordButton"
@@ -70,11 +146,6 @@
               <rect x="8" y="8" width="8" height="8" rx="1"></rect>
             </svg>
           </button>
-          <div id="storageModeGroup" class="segmented-control storage-mode" role="group" aria-label="Recording storage">
-            <button type="button" data-storage-mode="remote" aria-pressed="false">Remote</button>
-            <button type="button" data-storage-mode="local" aria-pressed="true">Local</button>
-            <button type="button" data-storage-mode="both" aria-pressed="false">Both</button>
-          </div>
           <button
             id="settingsToggleButton"
             class="icon-button settings-toggle"
@@ -97,38 +168,72 @@
               <button type="button" data-detect-mode="accurate" aria-pressed="false" title="精準辨識（較大模型，準確優先）">精準</button>
             </div>
           </div>
-          <label class="control-field" for="fpsInput">
-            FPS
-            <input id="fpsInput" type="number" min="1" max="30" step="1" value="10" />
-          </label>
-          <label class="control-field" for="qualityInput">
-            JPEG
-            <input id="qualityInput" type="number" min="0.3" max="0.95" step="0.05" value="0.9" />
-          </label>
-          <div class="control-field">
-            <span>Lens</span>
-            <button id="lensToggleButton" class="compact-button" type="button" aria-label="Switch to front camera">
-              Back
+          <div id="cameraParams" class="camera-params">
+            <label class="control-field" for="fpsInput">
+              FPS
+              <input id="fpsInput" type="number" min="1" max="30" step="1" value="10" />
+            </label>
+            <label class="control-field" for="qualityInput">
+              JPEG
+              <input id="qualityInput" type="number" min="0.3" max="0.95" step="0.05" value="0.9" />
+            </label>
+            <div class="control-field">
+              <span>Lens</span>
+              <button id="lensToggleButton" class="compact-button" type="button" aria-label="Switch to front camera">
+                Back
+              </button>
+            </div>
+            <label class="control-field control-field-wide" for="zoomInput">
+              Zoom
+              <input id="zoomInput" class="range-input" type="range" min="1" max="1" step="0.1" value="1" disabled />
+              <output id="zoomValue" for="zoomInput">1.0x</output>
+            </label>
+            <label class="control-field" for="shutterInput">
+              Shutter
+              <input id="shutterInput" type="number" placeholder="Auto" disabled />
+            </label>
+            <label class="control-field" for="isoInput">
+              ISO
+              <input id="isoInput" type="number" placeholder="Auto" disabled />
+            </label>
+          </div>
+          <div id="filePlayer" class="file-player">
+            <button
+              id="filePlayButton"
+              class="icon-button file-play-button"
+              type="button"
+              aria-label="播放／暫停"
+              title="播放／暫停"
+            >
+              <svg class="control-icon file-icon-play" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                <path d="M8 5v14l11-7z" fill="currentColor"></path>
+              </svg>
+              <svg class="control-icon file-icon-pause" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                <rect x="7" y="6" width="3.5" height="12" rx="1"></rect>
+                <rect x="13.5" y="6" width="3.5" height="12" rx="1"></rect>
+              </svg>
+            </button>
+            <input id="fileSeek" class="range-input file-seek" type="range" min="0" max="100" step="0.1" value="0" />
+            <output id="fileTime" class="file-time" for="fileSeek">0:00 / 0:00</output>
+            <span id="fileName" class="file-name"></span>
+            <button
+              id="fileEjectButton"
+              class="icon-button file-eject-button"
+              type="button"
+              aria-label="關閉檔案，返回相機"
+              title="關閉檔案，返回相機"
+            >
+              <svg class="control-icon" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                <path d="M18 6 6 18"></path>
+                <path d="m6 6 12 12"></path>
+              </svg>
             </button>
           </div>
-          <label class="control-field control-field-wide" for="zoomInput">
-            Zoom
-            <input id="zoomInput" class="range-input" type="range" min="1" max="1" step="0.1" value="1" disabled />
-            <output id="zoomValue" for="zoomInput">1.0x</output>
-          </label>
-          <label class="control-field" for="shutterInput">
-            Shutter
-            <input id="shutterInput" type="number" placeholder="Auto" disabled />
-          </label>
-          <label class="control-field" for="isoInput">
-            ISO
-            <input id="isoInput" type="number" placeholder="Auto" disabled />
-          </label>
         </div>
       </section>
 
       <canvas id="captureCanvas" hidden></canvas>
     </main>
-    <script type="module" src="/static/phone.js?v=detect-mode-1"></script>
+    <script type="module" src="/static/phone.js?v=file-detect-2"></script>
   </body>
 </html>

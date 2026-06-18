@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YOLO Elf Settings</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <script src="/static/theme.js"></script>
+    <link rel="stylesheet" href="/static/app.css?v=ui-3" />
+  </head>
+  <body class="settings-page">
+    <main class="settings-shell">
+      <header class="hud topbar settings-topbar">
+        <div class="brand"><img src="/static/logo.svg" alt="YOLO Elf" /></div>
+        <nav class="role-switch" aria-label="Mode">
+          <a href="/recorder" aria-label="Recorder" title="Recorder">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+              <circle cx="12" cy="13" r="4"></circle>
+            </svg>
+          </a>
+          <a href="/viewer" aria-label="Viewer" title="Viewer">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </a>
+          <a href="/settings" aria-current="page" aria-label="Settings" title="Settings">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </a>
+        </nav>
+        <div class="topbar-actions">
+          <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme" title="Toggle theme">
+            <svg class="theme-icon theme-icon-sun" data-theme-icon-sun aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2"></path>
+              <path d="M12 20v2"></path>
+              <path d="m4.93 4.93 1.41 1.41"></path>
+              <path d="m17.66 17.66 1.41 1.41"></path>
+              <path d="M2 12h2"></path>
+              <path d="M20 12h2"></path>
+              <path d="m6.34 17.66-1.41 1.41"></path>
+              <path d="m19.07 4.93-1.41 1.41"></path>
+            </svg>
+            <svg class="theme-icon theme-icon-moon" data-theme-icon-moon aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <path d="M12 3a6 6 0 0 0 9 7.4A9 9 0 1 1 12 3Z"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="settings-body">
+        <section class="settings-card" aria-labelledby="settingsTitle">
+          <div class="panel-header">
+            <span class="panel-title" id="settingsTitle">辨識設定</span>
+            <span id="settingsState" class="chip warn">載入中…</span>
+          </div>
+
+          <div id="modelSwitchProgress" class="switch-progress" role="status" aria-live="polite">
+            <span class="switch-label">切換模型中…</span>
+            <div class="progress-track"><div id="modelSwitchFill" class="progress-fill"></div></div>
+          </div>
+
+          <form id="settingsForm" class="settings-form">
+            <div class="settings-row">
+              <label class="settings-label" id="modeLabel">辨識模式</label>
+              <div id="modeGroup" class="segmented-control detect-mode" role="group" aria-labelledby="modeLabel">
+                <button type="button" data-detect-mode="fast" aria-pressed="true" title="快速辨識（較小模型，速度優先）">快速</button>
+                <button type="button" data-detect-mode="accurate" aria-pressed="false" title="精準辨識（較大模型，準確優先）">精準</button>
+              </div>
+            </div>
+
+            <label class="settings-row" for="fastModelInput">
+              <span class="settings-label">快速模型</span>
+              <input id="fastModelInput" type="text" autocomplete="off" spellcheck="false" placeholder="yolov8s.pt" />
+            </label>
+
+            <label class="settings-row" for="accurateModelInput">
+              <span class="settings-label">精準模型</span>
+              <input id="accurateModelInput" type="text" autocomplete="off" spellcheck="false" placeholder="yolov8x.pt" />
+            </label>
+
+            <label class="settings-row" for="classesInput">
+              <span class="settings-label">開放詞彙類別</span>
+              <input id="classesInput" type="text" autocomplete="off" spellcheck="false" placeholder="person, backpack, fire extinguisher" />
+            </label>
+            <p class="settings-hint">以逗號分隔，僅在使用 YOLO-World／YOLOE（如 <code>yolov8x-worldv2.pt</code>）模型時生效；留空則用模型內建類別。</p>
+
+            <label class="settings-row" for="confInput">
+              <span class="settings-label">信心門檻</span>
+              <input id="confInput" type="number" min="0" max="1" step="0.05" placeholder="0.2" />
+            </label>
+
+            <label class="settings-row" for="imgSizeInput">
+              <span class="settings-label">影像尺寸</span>
+              <input id="imgSizeInput" type="number" min="32" max="4096" step="32" placeholder="1280" />
+            </label>
+
+            <div class="settings-actions">
+              <button id="resetButton" type="button" class="compact-button">重設</button>
+              <button id="saveButton" type="submit" class="primary">套用</button>
+            </div>
+            <div id="settingsError" class="error-line" hidden></div>
+          </form>
+        </section>
+
+        <section class="settings-card settings-guide" aria-labelledby="guideTitle">
+          <div class="panel-header">
+            <span class="panel-title" id="guideTitle">設置流程</span>
+          </div>
+          <ol class="settings-steps">
+            <li><strong>選模型</strong>：填入快速／精準模型檔名。一般物件用 <code>yolov8x.pt</code>（COCO 80 類）或 <code>yolov8x-oiv7.pt</code>（Open Images 600 類）；專用任務（人臉、車牌、安全帽）填下載好的 <code>.pt</code>。首次使用會自動下載權重。</li>
+            <li><strong>開放詞彙（選用）</strong>：模型填 <code>yolov8x-worldv2.pt</code>，在「開放詞彙類別」輸入要偵測的詞，例如 <code>person, backpack</code>。</li>
+            <li><strong>調靈敏度</strong>：信心門檻越低召回越高、誤判越多；影像尺寸越大小物件越清楚但越慢。</li>
+            <li><strong>套用</strong>：按「套用」即時生效，不必重啟。換模型後下一張影格才載入新權重，第一張會略慢。</li>
+            <li><strong>確認</strong>：右上狀態顯示 <code>已套用</code> 即成功；在 Viewer 頁切到對應模式可看到效果。</li>
+          </ol>
+          <p class="settings-hint">想開機就帶設定，可改用環境變數或 <code>run.ps1</code> 參數（見 <code>TUNING.md</code>）。右上角 Recorder／Viewer／Settings 按鈕可切換頁面。</p>
+        </section>
+      </div>
+    </main>
+    <script type="module" src="/static/settings.js"></script>
+  </body>
+</html>

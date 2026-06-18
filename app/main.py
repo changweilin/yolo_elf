@@ -111,6 +111,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
+    @api.get("/settings")
+    async def settings_page() -> FileResponse:
+        return FileResponse(
+            resolved_settings.static_dir / "settings.html",
+            headers={"Cache-Control": "no-store"},
+        )
+
     @api.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -130,7 +137,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             detector.set_mode(mode)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Detection mode is invalid") from exc
+        # Warm the new preset's weights in the background so the client progress
+        # bar can poll `/api/status` and tell when the switch is actually ready,
+        # even while no frames are streaming. preload() swallows load errors.
+        asyncio.create_task(asyncio.to_thread(detector.preload))
         return {"type": "detector_mode", "detector": detector.status()}
+
+    @api.get("/api/detector/config")
+    async def api_detector_config_get() -> dict[str, Any]:
+        return {"type": "detector_config", "detector": detector.status()}
+
+    @api.post("/api/detector/config")
+    async def api_detector_config(request: Request) -> dict[str, Any]:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Detector config is invalid")
+        try:
+            detector.update_config(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Warm the (possibly newly named) weights in the background so the
+        # settings-page progress bar can poll `/api/status` for readiness.
+        asyncio.create_task(asyncio.to_thread(detector.preload))
+        return {"type": "detector_config", "detector": detector.status()}
 
     @api.post("/api/recordings")
     async def api_recordings(request: Request) -> dict[str, Any]:
