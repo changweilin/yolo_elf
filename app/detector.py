@@ -67,6 +67,15 @@ class YoloDetector:
         self._classes: tuple[str, ...] = settings.yolo_classes
         self._conf_thresh: float = settings.conf_thresh
         self._img_size: int = settings.img_size
+        # Optional second-stage classifier: when a model name is set, every
+        # detection box is cropped and classified so each box gets a fine-grained
+        # `species` label on top of its coarse detection `label`. Empty = off.
+        self._classifier_name: str = settings.classifier_model
+        self._classifier_min_conf: float = settings.classifier_min_conf
+        self._classifier_model: Any = None
+        self._classifier_names: dict[int, str] = {}
+        self._classifier_lock = threading.Lock()
+        self._classifier_error: str | None = None
         self._models: dict[str, Any] = {}
         # Guards model loading so a background preload (triggered by a mode
         # switch) and the detection worker never load the same weights twice.
@@ -128,6 +137,12 @@ class YoloDetector:
             self._set_model_name("accurate", payload["accurate_model"])
         if payload.get("classes") is not None:
             self._set_classes(payload["classes"])
+        if payload.get("classifier_model") is not None:
+            self._set_classifier_name(payload["classifier_model"])
+        if payload.get("classifier_min_conf") is not None:
+            self._classifier_min_conf = self._validate_classifier_min_conf(
+                payload["classifier_min_conf"]
+            )
 
         return self.status()
 
@@ -150,6 +165,28 @@ class YoloDetector:
         if not 32 <= size <= 4096:
             raise ValueError("img_size must be between 32 and 4096")
         return size
+
+    @staticmethod
+    def _validate_classifier_min_conf(value: Any) -> float:
+        try:
+            conf = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("classifier_min_conf must be a number") from exc
+        if not 0.0 <= conf <= 1.0:
+            raise ValueError("classifier_min_conf must be between 0.0 and 1.0")
+        return conf
+
+    def _set_classifier_name(self, name: Any) -> None:
+        # Unlike the detection presets, an empty name is valid here: it disables
+        # the second-stage classifier. Swapping the name drops the cached weights
+        # so the new model (or the disabled state) takes effect on the next frame.
+        resolved = str(name).strip()
+        if resolved == self._classifier_name:
+            return
+        self._classifier_name = resolved
+        self._classifier_model = None
+        self._classifier_names = {}
+        self._classifier_error = None
 
     def _set_model_name(self, mode: str, name: Any) -> None:
         resolved = str(name).strip()
@@ -231,6 +268,11 @@ class YoloDetector:
             "warmup_ms": self._warmup_ms,
             "conf_thresh": self._conf_thresh,
             "img_size": self._img_size,
+            "classifier_model": self._classifier_name,
+            "classifier_enabled": bool(self._classifier_name),
+            "classifier_loaded": self._classifier_model is not None,
+            "classifier_min_conf": self._classifier_min_conf,
+            "last_classifier_error": self._classifier_error,
             "cuda_available": cuda_available,
             "cuda_device_count": cuda_device_count,
             "cuda_device_name": cuda_device_name,
@@ -252,6 +294,8 @@ class YoloDetector:
 
         inference_ms = (time.perf_counter() - started) * 1000.0
         boxes = self._extract_boxes(results[0], decoded.width, decoded.height)
+        if boxes and self._classifier_name:
+            self._classify_boxes(boxes, decoded.data, decoded.width, decoded.height)
         return {
             "frame_id": frame_id,
             "width": decoded.width,
@@ -317,6 +361,9 @@ class YoloDetector:
             self._ensure_model()
         except Exception:  # noqa: BLE001 - reported via last_load_error
             pass
+        # Warm the second-stage classifier too (no-op when disabled). It never
+        # raises; load failures surface via `last_classifier_error` in status.
+        self._ensure_classifier()
         return self.status()
 
     def _ensure_model(self) -> Any:
@@ -403,15 +450,16 @@ class YoloDetector:
             kwargs["half"] = True
         return kwargs
 
-    def _predict(self, model: Any, source: Any) -> Any:
+    def _inference_context(self) -> Any:
         try:
             import torch
 
-            context = torch.inference_mode()
+            return torch.inference_mode()
         except Exception:
-            context = nullcontext()
+            return nullcontext()
 
-        with context:
+    def _predict(self, model: Any, source: Any) -> Any:
+        with self._inference_context():
             return model.predict(**self._prediction_kwargs(source))
 
     def _synchronize_device(self) -> None:
@@ -424,6 +472,125 @@ class YoloDetector:
                 torch.cuda.synchronize()
         except Exception:
             return
+
+    def _ensure_classifier(self) -> Any:
+        """Lazily load the second-stage classifier; ``None`` when disabled/failed.
+
+        Unlike ``_ensure_model`` this never raises: a missing dependency or a bad
+        model name is recorded in ``_classifier_error`` and surfaced via status so
+        detection keeps working without species labels.
+        """
+        if not self._classifier_name:
+            return None
+        cached = self._classifier_model
+        if cached is not None:
+            return cached
+
+        with self._classifier_lock:
+            if self._classifier_model is not None:
+                return self._classifier_model
+
+            name = self._classifier_name
+            try:
+                from ultralytics import YOLO
+
+                model = YOLO(name)
+                names = getattr(model, "names", {}) or {}
+                if isinstance(names, dict):
+                    resolved = {int(key): str(value) for key, value in names.items()}
+                else:
+                    resolved = {index: str(value) for index, value in enumerate(names)}
+            except Exception as exc:  # noqa: BLE001 - reported via _classifier_error
+                self._classifier_error = f"Could not load classifier {name!r}: {exc}"
+                return None
+
+            self._classifier_model = model
+            self._classifier_names = resolved
+            self._classifier_error = None
+            return model
+
+    def _classify_boxes(
+        self, boxes: list[dict[str, Any]], image: Any, width: int, height: int
+    ) -> None:
+        """Attach a fine-grained ``species`` label to each detection box.
+
+        Crops every box from the frame, runs them through the classifier as one
+        batch, and writes ``species``/``species_confidence``/``species_class_id``
+        for boxes whose top-1 confidence clears ``classifier_min_conf``. Failures
+        are swallowed (recorded in ``_classifier_error``) so detection survives.
+        """
+        classifier = self._ensure_classifier()
+        if classifier is None:
+            return
+
+        crops: list[Any] = []
+        targets: list[dict[str, Any]] = []
+        for box in boxes:
+            crop = self._crop_box(image, box["xyxy"], width, height)
+            if crop is None:
+                continue
+            crops.append(crop)
+            targets.append(box)
+
+        if not crops:
+            return
+
+        try:
+            with self._inference_context():
+                results = classifier.predict(**self._classifier_prediction_kwargs(crops))
+        except Exception as exc:  # noqa: BLE001 - reported via _classifier_error
+            self._classifier_error = f"Classifier inference failed: {exc}"
+            return
+
+        for box, result in zip(targets, results):
+            species = self._top_species(result)
+            if species is None:
+                continue
+            box["species"] = species["label"]
+            box["species_confidence"] = species["confidence"]
+            box["species_class_id"] = species["class_id"]
+        self._classifier_error = None
+
+    @staticmethod
+    def _crop_box(image: Any, xyxy: list[float], width: int, height: int) -> Any:
+        import math
+
+        x1, y1, x2, y2 = xyxy
+        left = max(0, int(math.floor(x1)))
+        top = max(0, int(math.floor(y1)))
+        right = min(width, int(math.ceil(x2)))
+        bottom = min(height, int(math.ceil(y2)))
+        if right - left < 1 or bottom - top < 1:
+            return None
+        return image[top:bottom, left:right]
+
+    def _classifier_prediction_kwargs(self, source: Any) -> dict[str, Any]:
+        # Classification models use their own training resolution (typically 224),
+        # so we intentionally omit `imgsz`/`conf` here and only mirror the device
+        # and half-precision settings resolved for the detector.
+        kwargs: dict[str, Any] = {"source": source, "verbose": False}
+        if self._device is not None:
+            kwargs["device"] = self._device
+        if self._half_enabled:
+            kwargs["half"] = True
+        return kwargs
+
+    def _top_species(self, result: Any) -> dict[str, Any] | None:
+        probs = getattr(result, "probs", None)
+        if probs is None:
+            return None
+        try:
+            class_id = int(probs.top1)
+            confidence = float(probs.top1conf)
+        except Exception:
+            return None
+        if confidence < self._classifier_min_conf:
+            return None
+        return {
+            "class_id": class_id,
+            "label": self._classifier_names.get(class_id, str(class_id)),
+            "confidence": round(confidence, 4),
+        }
 
     def _extract_boxes(self, result: Any, width: int, height: int) -> list[dict[str, Any]]:
         extracted: list[dict[str, Any]] = []

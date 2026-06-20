@@ -302,7 +302,11 @@ function drawBoxes(ctx, detection, stageWidth, stageHeight) {
     const top = fit.y + y1 * fit.scale;
     const right = fit.x + x2 * fit.scale;
     const bottom = fit.y + y2 * fit.scale;
-    const label = `${box.label} ${(box.confidence * 100).toFixed(0)}%`;
+    // When the second-stage classifier named a species, show that as the
+    // primary label (圖鑑); otherwise fall back to the detection class.
+    const label = box.species
+      ? `${box.species} ${Math.round((box.species_confidence ?? 0) * 100)}%`
+      : `${box.label} ${(box.confidence * 100).toFixed(0)}%`;
 
     ctx.strokeStyle = color;
     ctx.fillStyle = color;

@@ -106,6 +106,8 @@ class Settings:
     yolo_warmup_runs: int
     conf_thresh: float
     img_size: int
+    classifier_model: str
+    classifier_min_conf: float
     frame_fps: int
     capture_width: int
     capture_height: int
@@ -139,6 +141,10 @@ def get_settings() -> Settings:
         yolo_warmup_runs=_bounded_int_env("YOLO_WARMUP_RUNS", 1, 1, 10),
         conf_thresh=_bounded_float_env("CONF_THRESH", 0.2, 0.0, 1.0),
         img_size=_bounded_int_env("IMG_SIZE", 1280, 32, 4096),
+        # Optional second-stage classifier (e.g. yolov8x-cls.pt, ImageNet 1000)
+        # that names the species inside each detection box. Empty = disabled.
+        classifier_model=os.getenv("CLASSIFIER_MODEL", "").strip(),
+        classifier_min_conf=_bounded_float_env("CLASSIFIER_MIN_CONF", 0.0, 0.0, 1.0),
         frame_fps=_bounded_int_env("FRAME_FPS", 10, 1, 60),
         capture_width=_bounded_int_env("CAPTURE_WIDTH", 1920, 64, 4096),
         capture_height=_bounded_int_env("CAPTURE_HEIGHT", 1080, 64, 4096),

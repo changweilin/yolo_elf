@@ -75,19 +75,48 @@
 
             <label class="settings-row" for="fastModelInput">
               <span class="settings-label">快速模型</span>
-              <input id="fastModelInput" type="text" autocomplete="off" spellcheck="false" placeholder="yolov8s.pt" />
+              <input id="fastModelInput" type="text" list="modelPresets" autocomplete="off" spellcheck="false" placeholder="yolov8s.pt" />
             </label>
 
             <label class="settings-row" for="accurateModelInput">
               <span class="settings-label">精準模型</span>
-              <input id="accurateModelInput" type="text" autocomplete="off" spellcheck="false" placeholder="yolov8x.pt" />
+              <input id="accurateModelInput" type="text" list="modelPresets" autocomplete="off" spellcheck="false" placeholder="yolov8x.pt" />
             </label>
+
+            <!-- Curated presets shared by both model inputs. Inputs stay free-text
+                 so custom paths and open-vocab models still work; this only adds
+                 quick-pick suggestions. First use auto-downloads the weights. -->
+            <datalist id="modelPresets">
+              <option value="yolov8n.pt" label="COCO 80 類 · 最快"></option>
+              <option value="yolov8s.pt" label="COCO 80 類 · 快速"></option>
+              <option value="yolov8m.pt" label="COCO 80 類 · 平衡"></option>
+              <option value="yolov8l.pt" label="COCO 80 類 · 偏準"></option>
+              <option value="yolov8x.pt" label="COCO 80 類 · 最準"></option>
+              <option value="yolov8x-oiv7.pt" label="Open Images V7 · 600 類（含更多動植物）"></option>
+              <option value="yolov8x-worldv2.pt" label="YOLO-World · 開放詞彙（搭配下方類別）"></option>
+            </datalist>
 
             <label class="settings-row" for="classesInput">
               <span class="settings-label">開放詞彙類別</span>
               <input id="classesInput" type="text" autocomplete="off" spellcheck="false" placeholder="person, backpack, fire extinguisher" />
             </label>
             <p class="settings-hint">以逗號分隔，僅在使用 YOLO-World／YOLOE（如 <code>yolov8x-worldv2.pt</code>）模型時生效；留空則用模型內建類別。</p>
+
+            <label class="settings-row" for="classifierModelInput">
+              <span class="settings-label">物種分類模型</span>
+              <input id="classifierModelInput" type="text" list="classifierPresets" autocomplete="off" spellcheck="false" placeholder="留空＝關閉" />
+            </label>
+            <datalist id="classifierPresets">
+              <option value="yolov8n-cls.pt" label="ImageNet 1000 類 · 最快"></option>
+              <option value="yolov8s-cls.pt" label="ImageNet 1000 類 · 快速"></option>
+              <option value="yolov8x-cls.pt" label="ImageNet 1000 類 · 最準"></option>
+            </datalist>
+            <p class="settings-hint">第二段分類器：對每個偵測框再裁切辨識，標出更細的物種（圖鑑用）。留空＝關閉，只做偵測。</p>
+
+            <label class="settings-row" for="classifierMinConfInput">
+              <span class="settings-label">物種信心門檻</span>
+              <input id="classifierMinConfInput" type="number" min="0" max="1" step="0.05" placeholder="0.0" />
+            </label>
 
             <label class="settings-row" for="confInput">
               <span class="settings-label">信心門檻</span>
@@ -114,6 +143,7 @@
           <ol class="settings-steps">
             <li><strong>選模型</strong>：填入快速／精準模型檔名。一般物件用 <code>yolov8x.pt</code>（COCO 80 類）或 <code>yolov8x-oiv7.pt</code>（Open Images 600 類）；專用任務（人臉、車牌、安全帽）填下載好的 <code>.pt</code>。首次使用會自動下載權重。</li>
             <li><strong>開放詞彙（選用）</strong>：模型填 <code>yolov8x-worldv2.pt</code>，在「開放詞彙類別」輸入要偵測的詞，例如 <code>person, backpack</code>。</li>
+            <li><strong>物種圖鑑（選用）</strong>：在「物種分類模型」填 <code>yolov8x-cls.pt</code>（ImageNet 1000 類），偵測框會再經第二段分類標出物種；「物種信心門檻」可過濾低信心的猜測。留空＝關閉。</li>
             <li><strong>調靈敏度</strong>：信心門檻越低召回越高、誤判越多；影像尺寸越大小物件越清楚但越慢。</li>
             <li><strong>套用</strong>：按「套用」即時生效，不必重啟。換模型後下一張影格才載入新權重，第一張會略慢。</li>
             <li><strong>確認</strong>：右上狀態顯示 <code>已套用</code> 即成功；在 Viewer 頁切到對應模式可看到效果。</li>

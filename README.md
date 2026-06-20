@@ -71,6 +71,8 @@ Common environment variables:
 | `YOLO_WARMUP` | `0` | Warms the detector during startup. |
 | `CONF_THRESH` | `0.2` | Detection confidence threshold. Lower = higher recall, more false positives. |
 | `IMG_SIZE` | `1280` | Detector image size. Higher helps small/distant objects but is slower. |
+| `CLASSIFIER_MODEL` | _(empty)_ | Optional second-stage classifier that names the species inside each detection box (field-guide mode). Each box is cropped and classified; the top-1 label is added as `species` on the box and shown in the Viewer overlay. Empty = detection only. Try `yolov8x-cls.pt` (ImageNet, 1000 classes); auto-downloaded on first use. |
+| `CLASSIFIER_MIN_CONF` | `0.0` | Minimum top-1 confidence for a species label to be attached. Raise it to suppress low-confidence guesses. Only used when `CLASSIFIER_MODEL` is set. |
 | `FRAME_FPS` | `10` | Requested phone capture FPS. |
 | `CAPTURE_WIDTH` | `1920` | Capture width upper bound. Frames keep the camera's aspect ratio and are never upscaled or stretched. |
 | `CAPTURE_HEIGHT` | `1080` | Capture height upper bound. Frames keep the camera's aspect ratio and are never upscaled or stretched. |

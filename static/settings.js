@@ -6,6 +6,8 @@ const modeButtons = Array.from(modeGroup.querySelectorAll("[data-detect-mode]"))
 const fastModelInput = document.querySelector("#fastModelInput");
 const accurateModelInput = document.querySelector("#accurateModelInput");
 const classesInput = document.querySelector("#classesInput");
+const classifierModelInput = document.querySelector("#classifierModelInput");
+const classifierMinConfInput = document.querySelector("#classifierMinConfInput");
 const confInput = document.querySelector("#confInput");
 const imgSizeInput = document.querySelector("#imgSizeInput");
 const saveButton = document.querySelector("#saveButton");
@@ -54,6 +56,8 @@ function populate(detector) {
   fastModelInput.value = models.fast ?? "";
   accurateModelInput.value = models.accurate ?? "";
   classesInput.value = (detector.configured_classes || []).join(", ");
+  classifierModelInput.value = detector.classifier_model ?? "";
+  classifierMinConfInput.value = detector.classifier_min_conf ?? "";
   confInput.value = detector.conf_thresh ?? "";
   imgSizeInput.value = detector.img_size ?? "";
 }
@@ -64,6 +68,9 @@ function buildPayload() {
     fast_model: fastModelInput.value.trim(),
     accurate_model: accurateModelInput.value.trim(),
     classes: classesInput.value,
+    classifier_model: classifierModelInput.value.trim(),
+    classifier_min_conf:
+      classifierMinConfInput.value === "" ? null : Number(classifierMinConfInput.value),
     conf_thresh: confInput.value === "" ? null : Number(confInput.value),
     img_size: imgSizeInput.value === "" ? null : Number(imgSizeInput.value),
   };
