@@ -182,6 +182,8 @@ def test_update_config_accepts_classes_as_list(monkeypatch):
         {"fast_model": "   "},
         {"classifier_min_conf": 1.5},
         {"classifier_min_conf": "abc"},
+        {"classifier_max_boxes": 0},
+        {"classifier_max_boxes": "abc"},
     ],
 )
 def test_update_config_rejects_invalid_values(monkeypatch, payload):
@@ -196,17 +198,23 @@ def test_status_reports_classifier_disabled_by_default(monkeypatch):
     assert status["classifier_enabled"] is False
     assert status["classifier_loaded"] is False
     assert status["classifier_min_conf"] == 0.0
+    assert status["classifier_max_boxes"] == 5
     assert status["last_classifier_error"] is None
 
 
 def test_update_config_sets_classifier_model_and_min_conf(monkeypatch):
     detector = _detector(monkeypatch)
     status = detector.update_config(
-        {"classifier_model": "yolov8x-cls.pt", "classifier_min_conf": 0.3}
+        {
+            "classifier_model": "yolov8x-cls.pt",
+            "classifier_min_conf": 0.3,
+            "classifier_max_boxes": 8,
+        }
     )
     assert status["classifier_model"] == "yolov8x-cls.pt"
     assert status["classifier_enabled"] is True
     assert status["classifier_min_conf"] == 0.3
+    assert status["classifier_max_boxes"] == 8
 
 
 def test_update_config_swapping_classifier_drops_cached_model(monkeypatch):
@@ -262,6 +270,34 @@ def test_classify_boxes_skips_species_below_min_conf(monkeypatch):
     detector._classify_boxes(boxes, image, 40, 40)
 
     assert "species" not in boxes[0]
+
+
+def test_classify_boxes_only_classifies_largest_boxes(monkeypatch):
+    import numpy as np
+
+    detector = _detector(monkeypatch)
+    detector._classifier_name = "yolov8x-cls.pt"
+    detector._classifier_max_boxes = 5
+    classifier = _FakeClassifier(top1=0, top1conf=0.9)
+    detector._classifier_model = classifier
+    detector._classifier_names = {0: "tabby cat"}
+
+    image = np.zeros((200, 200, 3), dtype=np.uint8)
+    # Seven boxes of strictly increasing area; the two smallest must be skipped.
+    boxes = [
+        {"xyxy": [0.0, 0.0, float(side), float(side)], "class_id": 0, "label": "cat",
+         "confidence": 0.8}
+        for side in (10, 20, 30, 40, 50, 60, 70)
+    ]
+    detector._classify_boxes(boxes, image, 200, 200)
+
+    classified = [box for box in boxes if "species" in box]
+    # Only the top-5 by area get a species; the 10px and 20px boxes do not.
+    assert len(classified) == 5
+    assert len(classifier.received["source"]) == 5
+    assert "species" not in boxes[0]
+    assert "species" not in boxes[1]
+    assert all("species" in box for box in boxes[2:])
 
 
 def test_classify_boxes_skips_degenerate_crops(monkeypatch):

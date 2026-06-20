@@ -108,6 +108,7 @@ class Settings:
     img_size: int
     classifier_model: str
     classifier_min_conf: float
+    classifier_max_boxes: int
     frame_fps: int
     capture_width: int
     capture_height: int
@@ -145,6 +146,10 @@ def get_settings() -> Settings:
         # that names the species inside each detection box. Empty = disabled.
         classifier_model=os.getenv("CLASSIFIER_MODEL", "").strip(),
         classifier_min_conf=_bounded_float_env("CLASSIFIER_MIN_CONF", 0.0, 0.0, 1.0),
+        # Throttle: classify only the N largest detection boxes per frame so a
+        # crowded frame can't stall the pipeline. Boxes outside the top-N keep
+        # their detection label without a species.
+        classifier_max_boxes=_bounded_int_env("CLASSIFIER_MAX_BOXES", 5, 1, 100),
         frame_fps=_bounded_int_env("FRAME_FPS", 10, 1, 60),
         capture_width=_bounded_int_env("CAPTURE_WIDTH", 1920, 64, 4096),
         capture_height=_bounded_int_env("CAPTURE_HEIGHT", 1080, 64, 4096),

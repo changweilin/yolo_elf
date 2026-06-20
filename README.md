@@ -73,6 +73,7 @@ Common environment variables:
 | `IMG_SIZE` | `1280` | Detector image size. Higher helps small/distant objects but is slower. |
 | `CLASSIFIER_MODEL` | _(empty)_ | Optional second-stage classifier that names the species inside each detection box (field-guide mode). Each box is cropped and classified; the top-1 label is added as `species` on the box and shown in the Viewer overlay. Empty = detection only. Try `yolov8x-cls.pt` (ImageNet, 1000 classes); auto-downloaded on first use. |
 | `CLASSIFIER_MIN_CONF` | `0.0` | Minimum top-1 confidence for a species label to be attached. Raise it to suppress low-confidence guesses. Only used when `CLASSIFIER_MODEL` is set. |
+| `CLASSIFIER_MAX_BOXES` | `5` | Throttle: classify at most this many boxes per frame, picking the largest by area. Caps the per-frame classifier cost on crowded frames; smaller boxes keep their detection label without a species. Only used when `CLASSIFIER_MODEL` is set. |
 | `FRAME_FPS` | `10` | Requested phone capture FPS. |
 | `CAPTURE_WIDTH` | `1920` | Capture width upper bound. Frames keep the camera's aspect ratio and are never upscaled or stretched. |
 | `CAPTURE_HEIGHT` | `1080` | Capture height upper bound. Frames keep the camera's aspect ratio and are never upscaled or stretched. |

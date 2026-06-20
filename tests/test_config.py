@@ -17,6 +17,7 @@ SETTINGS_ENV = [
     "IMG_SIZE",
     "CLASSIFIER_MODEL",
     "CLASSIFIER_MIN_CONF",
+    "CLASSIFIER_MAX_BOXES",
     "FRAME_FPS",
     "CAPTURE_WIDTH",
     "CAPTURE_HEIGHT",
@@ -55,6 +56,7 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
     assert settings.img_size == 1280
     assert settings.classifier_model == ""
     assert settings.classifier_min_conf == 0.0
+    assert settings.classifier_max_boxes == 5
     assert settings.capture_width == 1920
     assert settings.capture_height == 1080
     assert settings.jpeg_quality == 0.9
@@ -71,6 +73,7 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     monkeypatch.setenv("YOLO_MODEL_ACCURATE", "yolo11x.pt")
     monkeypatch.setenv("CLASSIFIER_MODEL", " yolov8x-cls.pt ")
     monkeypatch.setenv("CLASSIFIER_MIN_CONF", "0.4")
+    monkeypatch.setenv("CLASSIFIER_MAX_BOXES", "3")
     monkeypatch.setenv("YOLO_HALF", "true")
     monkeypatch.setenv("YOLO_WARMUP", "1")
     monkeypatch.setenv("YOLO_WARMUP_RUNS", "2")
@@ -94,6 +97,7 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     assert settings.yolo_model_accurate == "yolo11x.pt"
     assert settings.classifier_model == "yolov8x-cls.pt"
     assert settings.classifier_min_conf == 0.4
+    assert settings.classifier_max_boxes == 3
     assert settings.yolo_half is True
     assert settings.yolo_warmup is True
     assert settings.yolo_warmup_runs == 2
@@ -131,6 +135,7 @@ def test_yolo_classes_parses_comma_separated_prompts(monkeypatch):
         ("CONF_THRESH", "1.5"),
         ("IMG_SIZE", "16"),
         ("CLASSIFIER_MIN_CONF", "1.5"),
+        ("CLASSIFIER_MAX_BOXES", "0"),
         ("FRAME_FPS", "0"),
         ("CAPTURE_WIDTH", "32"),
         ("CAPTURE_HEIGHT", "32"),

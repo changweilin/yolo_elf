@@ -72,6 +72,7 @@ class YoloDetector:
         # `species` label on top of its coarse detection `label`. Empty = off.
         self._classifier_name: str = settings.classifier_model
         self._classifier_min_conf: float = settings.classifier_min_conf
+        self._classifier_max_boxes: int = settings.classifier_max_boxes
         self._classifier_model: Any = None
         self._classifier_names: dict[int, str] = {}
         self._classifier_lock = threading.Lock()
@@ -143,6 +144,10 @@ class YoloDetector:
             self._classifier_min_conf = self._validate_classifier_min_conf(
                 payload["classifier_min_conf"]
             )
+        if payload.get("classifier_max_boxes") is not None:
+            self._classifier_max_boxes = self._validate_classifier_max_boxes(
+                payload["classifier_max_boxes"]
+            )
 
         return self.status()
 
@@ -175,6 +180,16 @@ class YoloDetector:
         if not 0.0 <= conf <= 1.0:
             raise ValueError("classifier_min_conf must be between 0.0 and 1.0")
         return conf
+
+    @staticmethod
+    def _validate_classifier_max_boxes(value: Any) -> int:
+        try:
+            limit = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("classifier_max_boxes must be an integer") from exc
+        if not 1 <= limit <= 100:
+            raise ValueError("classifier_max_boxes must be between 1 and 100")
+        return limit
 
     def _set_classifier_name(self, name: Any) -> None:
         # Unlike the detection presets, an empty name is valid here: it disables
@@ -272,6 +287,7 @@ class YoloDetector:
             "classifier_enabled": bool(self._classifier_name),
             "classifier_loaded": self._classifier_model is not None,
             "classifier_min_conf": self._classifier_min_conf,
+            "classifier_max_boxes": self._classifier_max_boxes,
             "last_classifier_error": self._classifier_error,
             "cuda_available": cuda_available,
             "cuda_device_count": cuda_device_count,
@@ -523,9 +539,18 @@ class YoloDetector:
         if classifier is None:
             return
 
+        # Throttle: classify only the N largest boxes (by area). On a crowded
+        # frame the smaller boxes keep their detection label without a species,
+        # which bounds the per-frame classifier cost.
+        candidates = boxes
+        if len(candidates) > self._classifier_max_boxes:
+            candidates = sorted(boxes, key=self._box_area, reverse=True)[
+                : self._classifier_max_boxes
+            ]
+
         crops: list[Any] = []
         targets: list[dict[str, Any]] = []
-        for box in boxes:
+        for box in candidates:
             crop = self._crop_box(image, box["xyxy"], width, height)
             if crop is None:
                 continue
@@ -550,6 +575,11 @@ class YoloDetector:
             box["species_confidence"] = species["confidence"]
             box["species_class_id"] = species["class_id"]
         self._classifier_error = None
+
+    @staticmethod
+    def _box_area(box: dict[str, Any]) -> float:
+        x1, y1, x2, y2 = box["xyxy"]
+        return max(0.0, x2 - x1) * max(0.0, y2 - y1)
 
     @staticmethod
     def _crop_box(image: Any, xyxy: list[float], width: int, height: int) -> Any:

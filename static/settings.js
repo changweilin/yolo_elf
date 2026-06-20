@@ -8,6 +8,7 @@ const accurateModelInput = document.querySelector("#accurateModelInput");
 const classesInput = document.querySelector("#classesInput");
 const classifierModelInput = document.querySelector("#classifierModelInput");
 const classifierMinConfInput = document.querySelector("#classifierMinConfInput");
+const classifierMaxBoxesInput = document.querySelector("#classifierMaxBoxesInput");
 const confInput = document.querySelector("#confInput");
 const imgSizeInput = document.querySelector("#imgSizeInput");
 const saveButton = document.querySelector("#saveButton");
@@ -58,6 +59,7 @@ function populate(detector) {
   classesInput.value = (detector.configured_classes || []).join(", ");
   classifierModelInput.value = detector.classifier_model ?? "";
   classifierMinConfInput.value = detector.classifier_min_conf ?? "";
+  classifierMaxBoxesInput.value = detector.classifier_max_boxes ?? "";
   confInput.value = detector.conf_thresh ?? "";
   imgSizeInput.value = detector.img_size ?? "";
 }
@@ -71,6 +73,8 @@ function buildPayload() {
     classifier_model: classifierModelInput.value.trim(),
     classifier_min_conf:
       classifierMinConfInput.value === "" ? null : Number(classifierMinConfInput.value),
+    classifier_max_boxes:
+      classifierMaxBoxesInput.value === "" ? null : Number(classifierMaxBoxesInput.value),
     conf_thresh: confInput.value === "" ? null : Number(confInput.value),
     img_size: imgSizeInput.value === "" ? null : Number(imgSizeInput.value),
   };
