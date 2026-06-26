@@ -1099,3 +1099,79 @@ body.settings-page {
 .settings-guide .settings-hint {
   padding: 0 16px 16px;
 }
+
+.about-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.about-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.about-quote {
+  margin: 0;
+  padding-left: 14px;
+  border-left: 2px solid var(--accent);
+  display: grid;
+  gap: 4px;
+}
+
+.about-quote p {
+  margin: 0;
+  color: var(--text);
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.about-quote p[lang="en"] {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.about-quote footer {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-style: normal;
+}
+
+.about-quote cite {
+  font-style: italic;
+}
+
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.about-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--control-bg);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.about-link:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.about-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
