@@ -47,6 +47,25 @@ $env:YOLO_DEVICE = "0"
 - 追蹤狀態是每個模型各自維護：切換 快速／精準 模式時 id 不會延續。這是啟動時的設定，
   不透過設定頁即時切換（避免追蹤器狀態殘留造成誤判）。
 
+## 偵測歷史（回放誰在什麼時候出現）
+
+預設開啟（`EVENT_LOG_ENABLED=1`）：以 `track_id` 為單位，把每個物件在畫面中的存在聚合成一筆「出現紀錄」
+（首次／最後出現時間、停留秒數、經過哪些區域、最高信心、幀數），寫入本機 SQLite（`EVENT_DB_PATH`，預設 `events.db`）。
+到 `/history` 頁面即可依類別、區域、時間範圍查詢時間軸。
+
+- **需要追蹤**：紀錄以 `track_id` 聚合，所以要 `YOLO_TRACK=1`（預設開）；關掉追蹤就沒有 `track_id` 可聚合。
+- **何時定案**：一個 `track_id` 連續未再出現超過 `EVENT_EXPIRY_SEC`（預設 5 秒）就視為離開，該筆紀錄定案並落地。
+  停留時間短的場景可調小、想合併短暫遮擋可調大。
+- **關閉**：`EVENT_LOG_ENABLED=0`；資料庫檔已列入 `.gitignore`。
+
+```powershell
+# 關閉歷史記錄
+$env:EVENT_LOG_ENABLED = "0"
+# 或改存到別的位置、放寬離開判定到 10 秒
+$env:EVENT_DB_PATH = "D:\yolo-elf\events.db"
+$env:EVENT_EXPIRY_SEC = "10"
+```
+
 ## ROI 區域（只看畫面的某一塊）
 
 在 Viewer 面板點「ROI 區域 → 編輯」，直接在畫面上點出多邊形頂點（至少 3 點）、按「完成」命名即可存下；

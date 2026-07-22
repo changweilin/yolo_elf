@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -28,6 +29,9 @@ REMOTE_ENV = [
     "ALERT_WEBHOOK_TOKEN",
     "ALERT_COOLDOWN_SEC",
     "ZONES",
+    "EVENT_LOG_ENABLED",
+    "EVENT_DB_PATH",
+    "EVENT_EXPIRY_SEC",
 ]
 
 
@@ -35,6 +39,9 @@ REMOTE_ENV = [
 def clear_remote_env(monkeypatch):
     for name in REMOTE_ENV:
         monkeypatch.delenv(name, raising=False)
+    # Event logging defaults on and writes a SQLite file; keep it off unless a
+    # test opts in with a tmp path, so the suite never touches the repo root.
+    monkeypatch.setenv("EVENT_LOG_ENABLED", "0")
 
 
 def test_health_and_pages_load():
@@ -230,6 +237,8 @@ def test_status_includes_stream_metrics():
     assert status["alerts"]["rules"] == []
     assert status["zones"]["enabled"] is False
     assert status["zones"]["zones"] == []
+    assert status["events"]["enabled"] is False
+    assert status["events"]["active_sightings"] == 0
 
 
 def test_alerts_default_to_disabled():
@@ -316,6 +325,61 @@ def test_viewer_exposes_zone_editor():
     assert 'id="zoneEditToggle"' in response.text
     assert 'id="zoneList"' in response.text
     assert 'id="alertStatus"' in response.text
+    assert 'href="/history"' in response.text
+
+
+def test_history_page_loads():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/history")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert 'id="historyFilters"' in response.text
+    assert 'href="/history" aria-current="page"' in response.text
+
+
+def test_events_query_is_empty_when_disabled():
+    app = create_app()
+    with TestClient(app) as client:
+        payload = client.get("/api/events").json()
+
+    assert payload["type"] == "events"
+    assert payload["events"] == []
+    assert payload["count"] == 0
+
+
+def test_events_round_trip_when_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("EVENT_LOG_ENABLED", "1")
+    monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
+    app = create_app()
+    with TestClient(app) as client:
+        # Persist a sighting directly through the shared store, then read it back
+        # through the query endpoint (no live camera/model needed).
+        store = app.state.event_store
+
+        async def seed():
+            await store.write(
+                [
+                    {
+                        "track_id": 9,
+                        "label": "person",
+                        "first_seen": 1000.0,
+                        "last_seen": 1006.0,
+                        "frames": 20,
+                        "max_confidence": 0.88,
+                        "zones": ["door"],
+                    }
+                ]
+            )
+
+        asyncio.run(seed())
+        payload = client.get("/api/events?label=person&zone=door").json()
+
+    assert payload["count"] == 1
+    assert payload["events"][0]["track_id"] == 9
+    assert payload["events"][0]["dwell_sec"] == 6.0
+    assert payload["events"][0]["zones"] == ["door"]
 
 
 def test_camera_client_state_is_reflected_in_status():

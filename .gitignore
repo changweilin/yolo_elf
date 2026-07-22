@@ -3,6 +3,8 @@ __pycache__/
 .pytest_cache/
 .ultralytics/
 recordings/
+events.db
+*.db
 dist/
 *.pyc
 *.pyo

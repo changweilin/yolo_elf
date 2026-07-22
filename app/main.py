@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from app.alerts import AlertEngine
 from app.config import Settings, get_settings
 from app.detector import DetectionError, YoloDetector, detection_error_payload
+from app.events import EventStore, SightingAggregator
 from app.recordings import RecordingStore, recording_storage_mode
 from app.remote_storage import RemoteStorage
 from app.stream_state import CameraFrame, StreamHub
@@ -39,6 +40,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     remote_storage = RemoteStorage(resolved_settings)
     alert_engine = AlertEngine(resolved_settings)
     zone_engine = ZoneEngine(resolved_settings)
+    event_store = EventStore(resolved_settings)
+    sightings = SightingAggregator()
 
     async def detection_worker() -> None:
         while True:
@@ -58,11 +61,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # Tag boxes with their ROI zones before anyone consumes the detection
             # so viewers, recordings and zone-scoped alert rules all agree.
             zone_engine.annotate(detection)
+            sightings.observe(detection, time.time())
             await hub.publish_detection(frame, detection, processing_started_at)
             await remote_storage.submit(frame, detection)
             events = await alert_engine.process(frame, detection)
             if events:
                 await hub.broadcast_alert(events)
+
+    async def event_flush_worker() -> None:
+        # Finalize and persist sightings whose track has gone quiet. Decoupled
+        # from the frame rate so SQLite writes stay infrequent and batched.
+        interval = min(2.0, resolved_settings.event_expiry_sec)
+        while True:
+            await asyncio.sleep(interval)
+            expired = sightings.take_expired(time.time(), resolved_settings.event_expiry_sec)
+            await event_store.write(expired)
 
     async def status_payload() -> dict[str, Any]:
         status = await hub.snapshot(detector.status())
@@ -70,6 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status["remote_storage"] = await remote_storage.snapshot()
         status["alerts"] = await alert_engine.snapshot()
         status["zones"] = zone_engine.snapshot()
+        status["events"] = {**event_store.snapshot(), "active_sightings": sightings.active_count}
         return status
 
     @asynccontextmanager
@@ -81,11 +95,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         api.state.remote_storage = remote_storage
         api.state.alert_engine = alert_engine
         api.state.zone_engine = zone_engine
+        api.state.event_store = event_store
+        api.state.sightings = sightings
         if resolved_settings.yolo_warmup:
             await asyncio.to_thread(detector.warmup)
         await remote_storage.start()
         await alert_engine.start()
         worker = asyncio.create_task(detection_worker())
+        flusher = (
+            asyncio.create_task(event_flush_worker())
+            if resolved_settings.event_log_enabled
+            else None
+        )
         try:
             yield
         finally:
@@ -94,6 +115,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await worker
             except asyncio.CancelledError:
                 pass
+            if flusher is not None:
+                flusher.cancel()
+                try:
+                    await flusher
+                except asyncio.CancelledError:
+                    pass
+                # Persist whatever was still in flight so nothing is lost on stop.
+                await event_store.write(sightings.take_all())
             await remote_storage.stop()
             await alert_engine.stop()
 
@@ -131,6 +160,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def settings_page() -> FileResponse:
         return FileResponse(
             resolved_settings.static_dir / "settings.html",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @api.get("/history")
+    async def history_page() -> FileResponse:
+        return FileResponse(
+            resolved_settings.static_dir / "history.html",
             headers={"Cache-Control": "no-store"},
         )
 
@@ -198,6 +234,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"type": "alerts", "alerts": await alert_engine.snapshot()}
+
+    @api.get("/api/events")
+    async def api_events(
+        limit: int = 100,
+        since: float | None = None,
+        until: float | None = None,
+        label: str | None = None,
+        zone: str | None = None,
+    ) -> dict[str, Any]:
+        events = await event_store.query(
+            limit=limit, since=since, until=until, label=label, zone=zone
+        )
+        return {"type": "events", "events": events, "count": len(events)}
 
     @api.get("/api/zones")
     async def api_zones_get() -> dict[str, Any]:

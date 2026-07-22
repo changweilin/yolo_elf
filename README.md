@@ -25,6 +25,7 @@
 - **快速 / 精準雙模式 / Fast & Accurate presets** — 可在小型快速模型與大型高精度模型間即時切換（Viewer 的「快速 / 精準」切換或 `POST /api/detector/mode`），無需重啟。
 - **執行階段調參 / Runtime tuning** — Settings 頁面可即時修改模型、類別、信心門檻與影像尺寸，立即生效。
 - **多物件追蹤 / Multi-object tracking** — 內建 ByteTrack / BoT-SORT，跨影格為每個物件維持穩定 `track_id`，標籤以 `#id` 顯示、錄影中繼資料一併記錄；可 `YOLO_TRACK=0` 關閉。
+- **偵測歷史 / Detection history** — 以 `track_id` 為單位把每個物件聚合成一筆「出現紀錄」（首/末出現、停留秒數、經過的區域、最高信心），寫入本機 SQLite，`/history` 頁面可依類別 / 區域 / 時間範圍查詢。需 `YOLO_TRACK`（預設開），可 `EVENT_LOG_ENABLED=0` 關閉。
 - **開放詞彙偵測 / Open-vocabulary detection** — 支援 YOLO-World / YOLOE 模型，以文字提示（如 `person,backpack,fire extinguisher`）自訂偵測類別。
 - **ROI 區域 / Region-of-interest zones** — 在 Viewer 直接框選多邊形區域，偵測框會標記所屬區域並即時顯示佔用數；告警規則可限定「只在某區域內」觸發。座標正規化（0–1），跟著畫面自動縮放，可經 `POST /api/zones` 即時增修。
 - **規則告警 / Rule-based alerts** — 依規則（類別、數量門檻、信心、區域）在偵測命中時觸發，帶冷卻時間去抖動；即時推送到 Viewer（含選用的瀏覽器通知）並可送出 webhook 串接外部系統。規則可經 `POST /api/alerts` 即時增修。
@@ -107,6 +108,7 @@ Each page header has a **Recorder / Viewer / Settings** switch so any device can
 | 錄影端 / Recorder | `http://127.0.0.1:8766/recorder`（別名 `/phone`） | 開啟相機、擷取畫面、錄影 / camera capture & recording |
 | 檢視端 / Viewer | `http://127.0.0.1:8766/viewer` | 即時畫面 + 偵測框 / live frames + detection boxes |
 | 設定 / Settings | `http://127.0.0.1:8766/settings` | 執行階段調整模型 / 類別 / 門檻 / live detector config |
+| 歷史 / History | `http://127.0.0.1:8766/history` | 偵測出現紀錄的時間軸與查詢 / sighting timeline & search |
 
 > 一次只有一個錄影端：在新裝置上取得錄影端角色，會把相機交接過去；檢視端數量不限。
 > Only one recorder streams at a time — taking the recorder role hands the camera over from the previous device. Viewers are unlimited.
@@ -227,6 +229,9 @@ Behaviour is driven by environment variables. The most common ones:
 | `ALERT_WEBHOOK_TIMEOUT` | `5.0` | webhook 逾時（秒）。 |
 | `ALERT_WEBHOOK_RETRIES` | `2` | 每次 webhook 發送的重試次數。 |
 | `ZONES` | _(空 / empty)_ | ROI 多邊形，JSON 陣列。每個區域：`name`（必填）、`points`（≥3 個 `[x,y]`，正規化 0–1）、`anchor`（`center` 中心點或 `bottom` 底邊中點，預設 `center`）。留空＝停用。範例：`[{"name":"門口","points":[[0.1,0.2],[0.4,0.2],[0.4,0.9],[0.1,0.9]]}]`。也可在 Viewer 框選或經 `POST /api/zones` 即時修改。 |
+| `EVENT_LOG_ENABLED` | `1` | 啟用偵測歷史：把追蹤到的物件聚合成 per-sighting 紀錄寫入 SQLite，供 `/history` 查詢。設 `0` 關閉。需搭配 `YOLO_TRACK`。 |
+| `EVENT_DB_PATH` | `events.db` | 偵測歷史 SQLite 檔路徑（相對路徑以專案根為基準）。 |
+| `EVENT_EXPIRY_SEC` | `5.0` | 一個 `track_id` 連續未再出現超過此秒數即視為離開，該筆 sighting 定案並寫入資料庫。 |
 
 > 遠端儲存預設停用，只有設定 `REMOTE_STORAGE_URL` 才會啟用；啟用後伺服器於背景上傳偵測中繼資料，僅在 `REMOTE_STORAGE_INCLUDE_FRAME=1` 時包含畫面。
 > Remote storage is disabled unless `REMOTE_STORAGE_URL` is set; frames are included only when `REMOTE_STORAGE_INCLUDE_FRAME=1`.
@@ -246,6 +251,7 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `GET /phone`, `GET /recorder` | 擷取 + 錄影頁（同一頁的裝置中立別名）/ capture + recording page. |
 | `GET /viewer` | 即時畫面 + 偵測框 / live frames + detection boxes. |
 | `GET /settings` | 執行階段偵測器設定 / runtime detector configuration. |
+| `GET /history` | 偵測出現紀錄時間軸 / sighting history timeline. |
 
 **JSON API**
 
@@ -260,6 +266,7 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `POST /api/alerts` | 執行階段替換告警規則。Body：`{"rules": [...]}` 或直接傳陣列 / replace alert rules at runtime. |
 | `GET /api/zones` | 目前 ROI 區域 / current ROI zones. |
 | `POST /api/zones` | 執行階段替換 ROI 區域。Body：`{"zones": [...]}` 或直接傳陣列 / replace ROI zones at runtime. |
+| `GET /api/events` | 查詢偵測出現紀錄。Query：`limit`、`since`、`until`（epoch 秒）、`label`、`zone` / query sighting history. |
 | `POST /api/recordings` | 上傳錄影，依 `X-Yolo-Elf-Storage-Mode` 標頭路由儲存 / upload a recording. |
 | `POST /api/recordings/{id}/metadata` | 為錄影附加逐格偵測 sidecar / attach detection sidecar. |
 | `GET /api/recordings/{id}` | 下載已儲存的錄影 / download a recording. |
@@ -285,6 +292,7 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `app/remote_storage.py` | 偵測中繼資料與錄影的背景上傳佇列。 |
 | `app/alerts.py` | 規則告警引擎：規則評估、冷卻去抖動、webhook 背景發送。 |
 | `app/zones.py` | ROI 區域引擎：多邊形點內判斷、偵測框區域標記與佔用計數。 |
+| `app/events.py` | 偵測歷史：追蹤結果聚合成 per-sighting 紀錄、SQLite 儲存與查詢。 |
 | `app/config.py` | 環境變數驅動的 `Settings` 與驗證。 |
 | `static/` | 瀏覽器頁面與資產（recorder、viewer、settings）。 |
 | `scripts/` | PowerShell / Node 輔助腳本：setup、run、bench、tailscale、靜態建置。 |

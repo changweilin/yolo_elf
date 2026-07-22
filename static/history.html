@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YOLO Elf History</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <script src="/static/theme.js"></script>
+    <link rel="stylesheet" href="/static/app.css?v=history-1" />
+  </head>
+  <body class="settings-page">
+    <main class="settings-shell">
+      <header class="hud topbar settings-topbar">
+        <div class="brand"><img src="/static/logo.svg" alt="YOLO Elf" /></div>
+        <nav class="role-switch" aria-label="Mode">
+          <a href="/recorder" aria-label="Recorder" title="Recorder">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+              <circle cx="12" cy="13" r="4"></circle>
+            </svg>
+          </a>
+          <a href="/viewer" aria-label="Viewer" title="Viewer">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </a>
+          <a href="/settings" aria-label="Settings" title="Settings">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </a>
+          <a href="/history" aria-current="page" aria-label="History" title="History">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="9"></circle>
+              <path d="M12 7v5l3 2"></path>
+            </svg>
+          </a>
+        </nav>
+        <div class="topbar-actions">
+          <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme" title="Toggle theme">
+            <svg class="theme-icon theme-icon-sun" data-theme-icon-sun aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2"></path>
+              <path d="M12 20v2"></path>
+              <path d="m4.93 4.93 1.41 1.41"></path>
+              <path d="m17.66 17.66 1.41 1.41"></path>
+              <path d="M2 12h2"></path>
+              <path d="M20 12h2"></path>
+              <path d="m6.34 17.66-1.41 1.41"></path>
+              <path d="m19.07 4.93-1.41 1.41"></path>
+            </svg>
+            <svg class="theme-icon theme-icon-moon" data-theme-icon-moon aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <path d="M12 3a6 6 0 0 0 9 7.4A9 9 0 1 1 12 3Z"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="settings-body">
+        <section class="settings-card" aria-labelledby="historyTitle">
+          <div class="panel-header">
+            <span class="panel-title" id="historyTitle">偵測歷史</span>
+            <span id="historyState" class="chip warn">載入中…</span>
+          </div>
+
+          <form id="historyFilters" class="history-filters">
+            <div class="history-range" role="group" aria-label="時間範圍">
+              <button type="button" class="compact-button" data-range="3600">近 1 小時</button>
+              <button type="button" class="compact-button" data-range="86400">近 24 小時</button>
+              <button type="button" class="compact-button" data-range="0">全部</button>
+            </div>
+            <label class="history-field" for="labelFilter">
+              <span>類別</span>
+              <input id="labelFilter" type="text" autocomplete="off" spellcheck="false" placeholder="全部（如 person）" />
+            </label>
+            <label class="history-field" for="zoneFilter">
+              <span>區域</span>
+              <input id="zoneFilter" type="text" autocomplete="off" spellcheck="false" placeholder="全部（如 門口）" />
+            </label>
+            <div class="history-actions">
+              <button id="refreshButton" type="submit" class="primary">查詢</button>
+            </div>
+          </form>
+
+          <div id="historyError" class="error-line" hidden></div>
+
+          <div class="history-table-wrap">
+            <table class="history-table">
+              <thead>
+                <tr>
+                  <th>首次出現</th>
+                  <th>類別</th>
+                  <th>#ID</th>
+                  <th>區域</th>
+                  <th>停留 (秒)</th>
+                  <th>信心</th>
+                  <th>幀數</th>
+                </tr>
+              </thead>
+              <tbody id="historyRows"></tbody>
+            </table>
+            <p id="historyEmpty" class="settings-hint" hidden>沒有符合條件的紀錄。</p>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script type="module" src="/static/history.js"></script>
+  </body>
+</html>

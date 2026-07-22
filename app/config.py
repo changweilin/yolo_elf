@@ -134,6 +134,9 @@ class Settings:
     alert_webhook_timeout: float
     alert_webhook_retries: int
     zones_json: str
+    event_log_enabled: bool
+    event_db_path: Path
+    event_expiry_sec: float
     static_dir: Path
 
 
@@ -202,5 +205,12 @@ def get_settings() -> Settings:
         # by app/zones.py. Boxes get a `zones` label and alert rules can be
         # scoped to a zone. Empty = zones off. Editable via POST /api/zones.
         zones_json=os.getenv("ZONES", "").strip(),
+        # Detection event history: aggregate tracked objects into per-sighting
+        # rows (first/last seen, dwell, zones) and persist to a local SQLite file
+        # for the /history timeline. A sighting is finalized once its track has
+        # been unseen for EVENT_EXPIRY_SEC.
+        event_log_enabled=_bool_env("EVENT_LOG_ENABLED", True),
+        event_db_path=_path_env("EVENT_DB_PATH", ROOT_DIR / "events.db"),
+        event_expiry_sec=_bounded_float_env("EVENT_EXPIRY_SEC", 5.0, 0.5, 3600.0),
         static_dir=ROOT_DIR / "static",
     )
