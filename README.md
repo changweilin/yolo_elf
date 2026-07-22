@@ -26,7 +26,8 @@
 - **執行階段調參 / Runtime tuning** — Settings 頁面可即時修改模型、類別、信心門檻與影像尺寸，立即生效。
 - **多物件追蹤 / Multi-object tracking** — 內建 ByteTrack / BoT-SORT，跨影格為每個物件維持穩定 `track_id`，標籤以 `#id` 顯示、錄影中繼資料一併記錄；可 `YOLO_TRACK=0` 關閉。
 - **開放詞彙偵測 / Open-vocabulary detection** — 支援 YOLO-World / YOLOE 模型，以文字提示（如 `person,backpack,fire extinguisher`）自訂偵測類別。
-- **規則告警 / Rule-based alerts** — 依規則（類別、數量門檻、信心）在偵測命中時觸發，帶冷卻時間去抖動；即時推送到 Viewer（含選用的瀏覽器通知）並可送出 webhook 串接外部系統。規則可經 `POST /api/alerts` 即時增修。
+- **ROI 區域 / Region-of-interest zones** — 在 Viewer 直接框選多邊形區域，偵測框會標記所屬區域並即時顯示佔用數；告警規則可限定「只在某區域內」觸發。座標正規化（0–1），跟著畫面自動縮放，可經 `POST /api/zones` 即時增修。
+- **規則告警 / Rule-based alerts** — 依規則（類別、數量門檻、信心、區域）在偵測命中時觸發，帶冷卻時間去抖動；即時推送到 Viewer（含選用的瀏覽器通知）並可送出 webhook 串接外部系統。規則可經 `POST /api/alerts` 即時增修。
 - **第二階段分類器 / Second-stage classifier** — 選用的圖鑑模式：裁切每個偵測框並分類，為物件標註物種 / 細分類別。
 - **多檢視端廣播 / Unlimited viewers** — 一次只有一個錄影端，但檢視端數量不限，全部接收相同畫面。
 - **錄影與中繼資料 / Recording & metadata** — 透過瀏覽器 `MediaRecorder` 錄影，可存本機、遠端或兩者，並附帶逐格偵測 `.detections.json` sidecar。
@@ -225,6 +226,7 @@ Behaviour is driven by environment variables. The most common ones:
 | `ALERT_WEBHOOK_TOKEN` | _(空 / empty)_ | webhook 的選用 bearer token。 |
 | `ALERT_WEBHOOK_TIMEOUT` | `5.0` | webhook 逾時（秒）。 |
 | `ALERT_WEBHOOK_RETRIES` | `2` | 每次 webhook 發送的重試次數。 |
+| `ZONES` | _(空 / empty)_ | ROI 多邊形，JSON 陣列。每個區域：`name`（必填）、`points`（≥3 個 `[x,y]`，正規化 0–1）、`anchor`（`center` 中心點或 `bottom` 底邊中點，預設 `center`）。留空＝停用。範例：`[{"name":"門口","points":[[0.1,0.2],[0.4,0.2],[0.4,0.9],[0.1,0.9]]}]`。也可在 Viewer 框選或經 `POST /api/zones` 即時修改。 |
 
 > 遠端儲存預設停用，只有設定 `REMOTE_STORAGE_URL` 才會啟用；啟用後伺服器於背景上傳偵測中繼資料，僅在 `REMOTE_STORAGE_INCLUDE_FRAME=1` 時包含畫面。
 > Remote storage is disabled unless `REMOTE_STORAGE_URL` is set; frames are included only when `REMOTE_STORAGE_INCLUDE_FRAME=1`.
@@ -256,6 +258,8 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `POST /api/detector/config` | 執行階段更新設定（部分更新，只變更傳入的鍵）/ partial runtime update. |
 | `GET /api/alerts` | 目前告警規則與觸發狀態 / current alert rules and firing state. |
 | `POST /api/alerts` | 執行階段替換告警規則。Body：`{"rules": [...]}` 或直接傳陣列 / replace alert rules at runtime. |
+| `GET /api/zones` | 目前 ROI 區域 / current ROI zones. |
+| `POST /api/zones` | 執行階段替換 ROI 區域。Body：`{"zones": [...]}` 或直接傳陣列 / replace ROI zones at runtime. |
 | `POST /api/recordings` | 上傳錄影，依 `X-Yolo-Elf-Storage-Mode` 標頭路由儲存 / upload a recording. |
 | `POST /api/recordings/{id}/metadata` | 為錄影附加逐格偵測 sidecar / attach detection sidecar. |
 | `GET /api/recordings/{id}` | 下載已儲存的錄影 / download a recording. |
@@ -280,6 +284,7 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `app/recordings.py` | 錄影上傳、中繼資料 sidecar、本機儲存。 |
 | `app/remote_storage.py` | 偵測中繼資料與錄影的背景上傳佇列。 |
 | `app/alerts.py` | 規則告警引擎：規則評估、冷卻去抖動、webhook 背景發送。 |
+| `app/zones.py` | ROI 區域引擎：多邊形點內判斷、偵測框區域標記與佔用計數。 |
 | `app/config.py` | 環境變數驅動的 `Settings` 與驗證。 |
 | `static/` | 瀏覽器頁面與資產（recorder、viewer、settings）。 |
 | `scripts/` | PowerShell / Node 輔助腳本：setup、run、bench、tailscale、靜態建置。 |

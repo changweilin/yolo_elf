@@ -36,9 +36,13 @@ class AlertRule:
     min_count: int
     min_confidence: float
     cooldown_sec: float
+    zone: str | None
 
     def matches_label(self, label: str) -> bool:
         return not self.classes or label in self.classes
+
+    def matches_zone(self, box: dict[str, Any]) -> bool:
+        return self.zone is None or self.zone in (box.get("zones") or [])
 
     def public(self) -> dict[str, Any]:
         return {
@@ -47,6 +51,7 @@ class AlertRule:
             "min_count": self.min_count,
             "min_confidence": self.min_confidence,
             "cooldown_sec": self.cooldown_sec,
+            "zone": self.zone,
         }
 
 
@@ -73,12 +78,15 @@ def _parse_rule(item: Any, index: int, default_cooldown: float) -> AlertRule:
     cooldown_sec = _non_negative_float(
         item.get("cooldown_sec", default_cooldown), name, "cooldown_sec"
     )
+    zone_raw = item.get("zone")
+    zone = str(zone_raw).strip() if zone_raw not in (None, "") else None
     return AlertRule(
         name=name,
         classes=classes,
         min_count=min_count,
         min_confidence=min_confidence,
         cooldown_sec=cooldown_sec,
+        zone=zone,
     )
 
 
@@ -199,6 +207,7 @@ class AlertEngine:
                     for box in boxes
                     if rule.matches_label(str(box.get("label", "")))
                     and float(box.get("confidence") or 0.0) >= rule.min_confidence
+                    and rule.matches_zone(box)
                 ]
                 if len(matches) < rule.min_count:
                     continue
@@ -264,6 +273,7 @@ class AlertEngine:
         return {
             "type": "alert",
             "rule": rule.name,
+            "zone": rule.zone,
             "count": len(matches),
             "frame_id": detection.get("frame_id"),
             "fired_at": fired_at,

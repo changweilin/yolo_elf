@@ -920,6 +920,7 @@ function collectRecordingDetection(detection) {
     label: String(box.label ?? box.class_id ?? ""),
     confidence: roundMetric(box.confidence ?? 0, 4),
     track_id: box.track_id ?? null,
+    zones: Array.isArray(box.zones) ? box.zones : [],
     xywh: xyxyToXywh(box.xyxy),
     xyxy: (box.xyxy || []).map((value) => roundMetric(value)),
   }));

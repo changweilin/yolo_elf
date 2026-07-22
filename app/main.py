@@ -16,6 +16,7 @@ from app.detector import DetectionError, YoloDetector, detection_error_payload
 from app.recordings import RecordingStore, recording_storage_mode
 from app.remote_storage import RemoteStorage
 from app.stream_state import CameraFrame, StreamHub
+from app.zones import ZoneEngine
 
 
 async def _apply_camera_text(hub: StreamHub, text: str) -> bool:
@@ -37,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     recording_store = RecordingStore(resolved_settings)
     remote_storage = RemoteStorage(resolved_settings)
     alert_engine = AlertEngine(resolved_settings)
+    zone_engine = ZoneEngine(resolved_settings)
 
     async def detection_worker() -> None:
         while True:
@@ -53,6 +55,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             finally:
                 hub.frame_queue.task_done()
 
+            # Tag boxes with their ROI zones before anyone consumes the detection
+            # so viewers, recordings and zone-scoped alert rules all agree.
+            zone_engine.annotate(detection)
             await hub.publish_detection(frame, detection, processing_started_at)
             await remote_storage.submit(frame, detection)
             events = await alert_engine.process(frame, detection)
@@ -64,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status["recordings"] = await recording_store.snapshot()
         status["remote_storage"] = await remote_storage.snapshot()
         status["alerts"] = await alert_engine.snapshot()
+        status["zones"] = zone_engine.snapshot()
         return status
 
     @asynccontextmanager
@@ -74,6 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         api.state.recording_store = recording_store
         api.state.remote_storage = remote_storage
         api.state.alert_engine = alert_engine
+        api.state.zone_engine = zone_engine
         if resolved_settings.yolo_warmup:
             await asyncio.to_thread(detector.warmup)
         await remote_storage.start()
@@ -191,6 +198,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"type": "alerts", "alerts": await alert_engine.snapshot()}
+
+    @api.get("/api/zones")
+    async def api_zones_get() -> dict[str, Any]:
+        return {"type": "zones", "zones": zone_engine.snapshot()}
+
+    @api.post("/api/zones")
+    async def api_zones_set(request: Request) -> dict[str, Any]:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        # Accept either {"zones": [...]} or a bare [...] array.
+        zones = body.get("zones") if isinstance(body, dict) else body
+        try:
+            zone_engine.set_zones(zones)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"type": "zones", "zones": zone_engine.snapshot()}
 
     @api.post("/api/recordings")
     async def api_recordings(request: Request) -> dict[str, Any]:

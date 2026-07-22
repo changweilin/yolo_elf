@@ -139,6 +139,25 @@ def test_empty_classes_matches_any_label(monkeypatch):
     assert events[0]["rule"] == "anything"
 
 
+def test_process_scopes_rule_to_zone(monkeypatch):
+    engine = _engine(
+        monkeypatch,
+        [{"name": "door-person", "classes": ["person"], "zone": "door", "cooldown_sec": 0}],
+    )
+    boxes = [
+        {"label": "person", "confidence": 0.9, "track_id": 1, "zones": ["door"]},
+        {"label": "person", "confidence": 0.9, "track_id": 2, "zones": ["lobby"]},
+        {"label": "person", "confidence": 0.9, "track_id": 3, "zones": []},
+    ]
+
+    events = asyncio.run(engine.process(_frame(), _detection(boxes)))
+
+    assert len(events) == 1
+    assert events[0]["count"] == 1
+    assert events[0]["zone"] == "door"
+    assert events[0]["track_ids"] == [1]
+
+
 def test_error_detection_never_fires(monkeypatch):
     engine = _engine(monkeypatch, [{"name": "anything", "cooldown_sec": 0}])
     events = asyncio.run(

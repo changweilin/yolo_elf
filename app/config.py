@@ -133,6 +133,7 @@ class Settings:
     alert_cooldown_sec: float
     alert_webhook_timeout: float
     alert_webhook_retries: int
+    zones_json: str
     static_dir: Path
 
 
@@ -197,5 +198,9 @@ def get_settings() -> Settings:
         alert_cooldown_sec=_bounded_float_env("ALERT_COOLDOWN_SEC", 15.0, 0.0, 3600.0),
         alert_webhook_timeout=_bounded_float_env("ALERT_WEBHOOK_TIMEOUT", 5.0, 0.1, 60.0),
         alert_webhook_retries=_bounded_int_env("ALERT_WEBHOOK_RETRIES", 2, 0, 5),
+        # ROI polygons (JSON array) in normalized 0..1 frame coordinates; parsed
+        # by app/zones.py. Boxes get a `zones` label and alert rules can be
+        # scoped to a zone. Empty = zones off. Editable via POST /api/zones.
+        zones_json=os.getenv("ZONES", "").strip(),
         static_dir=ROOT_DIR / "static",
     )

@@ -27,6 +27,7 @@ REMOTE_ENV = [
     "ALERT_WEBHOOK_URL",
     "ALERT_WEBHOOK_TOKEN",
     "ALERT_COOLDOWN_SEC",
+    "ZONES",
 ]
 
 
@@ -227,6 +228,8 @@ def test_status_includes_stream_metrics():
     assert status["remote_storage"]["enabled"] is False
     assert status["alerts"]["enabled"] is False
     assert status["alerts"]["rules"] == []
+    assert status["zones"]["enabled"] is False
+    assert status["zones"]["zones"] == []
 
 
 def test_alerts_default_to_disabled():
@@ -265,6 +268,54 @@ def test_alerts_rejects_invalid_rules():
 
     assert response.status_code == 400
     assert "name" in response.json()["detail"]
+
+
+def test_zones_default_to_disabled():
+    app = create_app()
+    with TestClient(app) as client:
+        payload = client.get("/api/zones").json()
+
+    assert payload["type"] == "zones"
+    assert payload["zones"]["enabled"] is False
+    assert payload["zones"]["zones"] == []
+
+
+def test_zones_round_trip():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/zones",
+            json={"zones": [{"name": "door", "points": [[0.1, 0.1], [0.4, 0.1], [0.4, 0.6]]}]},
+        )
+        assert response.status_code == 200
+        zones = response.json()["zones"]
+        assert zones["enabled"] is True
+        assert zones["zones"][0]["name"] == "door"
+        assert zones["zones"][0]["anchor"] == "center"
+        assert zones["zones"][0]["points"] == [[0.1, 0.1], [0.4, 0.1], [0.4, 0.6]]
+
+        assert client.get("/api/status").json()["zones"]["enabled"] is True
+
+
+def test_zones_reject_invalid_polygon():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/zones", json={"zones": [{"name": "bad", "points": [[0.1, 0.1], [0.4, 0.1]]}]}
+        )
+
+    assert response.status_code == 400
+    assert "points" in response.json()["detail"]
+
+
+def test_viewer_exposes_zone_editor():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/viewer")
+
+    assert 'id="zoneEditToggle"' in response.text
+    assert 'id="zoneList"' in response.text
+    assert 'id="alertStatus"' in response.text
 
 
 def test_camera_client_state_is_reflected_in_status():

@@ -806,6 +806,48 @@ input[type="range"] {
   color: var(--muted);
 }
 
+.zone-editor {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.zone-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.zone-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.zone-draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.zone-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.zone-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+
 .detect-mode {
   min-height: 36px;
 }

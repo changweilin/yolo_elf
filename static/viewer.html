@@ -110,6 +110,21 @@
             <div id="uploadMetric" class="metric-value">-</div>
           </div>
         </div>
+        <div class="panel-control zone-editor">
+          <div class="zone-editor-head">
+            <span class="panel-control-label">ROI 區域</span>
+            <button id="zoneEditToggle" type="button" class="compact-button">編輯</button>
+          </div>
+          <div id="zoneDraftBar" class="zone-draft" hidden>
+            <span id="zoneDraftHint" class="settings-hint">點擊畫面加入頂點（至少 3 點）</span>
+            <div class="zone-draft-actions">
+              <button id="zoneFinishButton" type="button" class="compact-button">完成</button>
+              <button id="zoneUndoButton" type="button" class="compact-button">退一步</button>
+              <button id="zoneClearButton" type="button" class="compact-button">清除</button>
+            </div>
+          </div>
+          <ul id="zoneList" class="zone-list"></ul>
+        </div>
         <div id="errorLine" class="error-line" hidden></div>
       </aside>
     </main>

@@ -39,12 +39,25 @@ const demoDetection = {
   height: 720,
   inference_ms: 18.6,
   boxes: [
-    { xyxy: [124, 137, 392, 535], class_id: 0, label: "monitor", confidence: 0.88, track_id: 1 },
-    { xyxy: [489, 302, 633, 514], class_id: 1, label: "bottle", confidence: 0.76, track_id: 2 },
-    { xyxy: [759, 219, 1062, 521], class_id: 2, label: "package", confidence: 0.93, track_id: 3 },
+    { xyxy: [124, 137, 392, 535], class_id: 0, label: "monitor", confidence: 0.88, track_id: 1, zones: ["doorway"] },
+    { xyxy: [489, 302, 633, 514], class_id: 1, label: "bottle", confidence: 0.76, track_id: 2, zones: [] },
+    { xyxy: [759, 219, 1062, 521], class_id: 2, label: "package", confidence: 0.93, track_id: 3, zones: [] },
   ],
+  zone_counts: { doorway: 1 },
   error: "",
 };
+
+const demoZones = [
+  { name: "doorway", anchor: "center", points: [[0.05, 0.2], [0.35, 0.2], [0.35, 0.95], [0.05, 0.95]] },
+];
+
+const zoneEditToggle = document.querySelector("#zoneEditToggle");
+const zoneDraftBar = document.querySelector("#zoneDraftBar");
+const zoneDraftHint = document.querySelector("#zoneDraftHint");
+const zoneFinishButton = document.querySelector("#zoneFinishButton");
+const zoneUndoButton = document.querySelector("#zoneUndoButton");
+const zoneClearButton = document.querySelector("#zoneClearButton");
+const zoneList = document.querySelector("#zoneList");
 
 const state = {
   ws: null,
@@ -52,6 +65,9 @@ const state = {
   pendingFrame: null,
   imageUrl: null,
   reconnectTimer: null,
+  zones: [],
+  zoneCounts: {},
+  editor: { active: false, draft: [] },
 };
 
 function staticAsset(name) {
@@ -128,6 +144,11 @@ function renderDemoViewer() {
   for (const button of modeButtons) {
     button.disabled = true;
   }
+  if (zoneEditToggle) {
+    zoneEditToggle.disabled = true;
+  }
+  state.zones = demoZones;
+  renderZoneList();
   droppedMetric.textContent = "0";
   recordingMetric.textContent = "0";
   uploadMetric.textContent = "0";
@@ -218,9 +239,17 @@ function renderStatus(status) {
     setChip(storageStatus, "remote storage off", "warn");
   }
   renderAlerts(status.alerts);
+  renderZones(status.zones);
   if (status.last_error) {
     renderError(status.last_error);
   }
+}
+
+function renderZones(zones) {
+  // Saved zones are server-owned; the in-progress draft lives in state.editor,
+  // so refreshing this list never disturbs an active drawing.
+  state.zones = (zones && zones.zones) || [];
+  renderZoneList();
 }
 
 // Keep a just-fired alert on screen briefly instead of letting the 1s status
@@ -306,6 +335,7 @@ function renderMetrics(detection) {
   frameMetric.textContent = String(detection.frame_id ?? "-");
   boxesMetric.textContent = String(detection.boxes?.length ?? 0);
   inferenceMetric.textContent = `${detection.inference_ms ?? 0} ms`;
+  state.zoneCounts = detection.zone_counts || {};
 }
 
 function renderError(message) {
@@ -336,7 +366,9 @@ function drawOverlay() {
 
   const detection = state.latestDetection;
   if (detection && detection.width > 0 && detection.height > 0) {
+    drawZones(ctx, detection, width, height);
     drawBoxes(ctx, detection, width, height);
+    drawDraft(ctx, detection, width, height);
   }
   requestAnimationFrame(drawOverlay);
 }
@@ -388,6 +420,220 @@ function colorForClass(classId) {
   return colors[Math.abs(Number(classId || 0)) % colors.length];
 }
 
+// ROI zones are stored normalized (0..1) to the source frame, so map them onto
+// the same letterboxed rectangle the frame is drawn in.
+function zonePointToStage(fit, detection, nx, ny) {
+  return [fit.x + nx * detection.width * fit.scale, fit.y + ny * detection.height * fit.scale];
+}
+
+function zoneColor(index) {
+  const colors = ["#ffd166", "#06d6a0", "#ef476f", "#118ab2", "#c77dff"];
+  return colors[Math.abs(Number(index || 0)) % colors.length];
+}
+
+function tracePolygon(ctx, points) {
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i += 1) {
+    ctx.lineTo(points[i][0], points[i][1]);
+  }
+}
+
+function drawZones(ctx, detection, stageWidth, stageHeight) {
+  if (!state.zones.length) {
+    return;
+  }
+  const fit = fitContain(stageWidth, stageHeight, detection.width, detection.height);
+  ctx.lineWidth = 2;
+  ctx.font = "600 13px system-ui, sans-serif";
+  ctx.textBaseline = "top";
+
+  state.zones.forEach((zone, index) => {
+    const points = (zone.points || []).map(([nx, ny]) => zonePointToStage(fit, detection, nx, ny));
+    if (points.length < 2) {
+      return;
+    }
+    const color = zoneColor(index);
+    tracePolygon(ctx, points);
+    ctx.closePath();
+    ctx.fillStyle = withAlpha(color, 0.14);
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.stroke();
+
+    const count = state.zoneCounts?.[zone.name] ?? 0;
+    const label = `${zone.name} · ${count}`;
+    const [lx, ly] = points[0];
+    const top = Math.max(0, ly - 22);
+    ctx.fillStyle = color;
+    ctx.fillRect(lx, top, ctx.measureText(label).width + 12, 20);
+    ctx.fillStyle = "#10100f";
+    ctx.fillText(label, lx + 6, top + 3);
+  });
+}
+
+function drawDraft(ctx, detection, stageWidth, stageHeight) {
+  const draft = state.editor.draft;
+  if (!state.editor.active || !draft.length) {
+    return;
+  }
+  const fit = fitContain(stageWidth, stageHeight, detection.width, detection.height);
+  const points = draft.map(([nx, ny]) => zonePointToStage(fit, detection, nx, ny));
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#ffd166";
+  ctx.fillStyle = "#ffd166";
+  if (points.length > 1) {
+    tracePolygon(ctx, points);
+    ctx.stroke();
+  }
+  for (const [x, y] of points) {
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function withAlpha(hex, alpha) {
+  const value = hex.replace("#", "");
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function round4(value) {
+  return Math.round(value * 10000) / 10000;
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function stageToNormalized(clientX, clientY) {
+  const detection = state.latestDetection;
+  if (!detection || !detection.width || !detection.height) {
+    return null;
+  }
+  const rect = overlay.getBoundingClientRect();
+  const fit = fitContain(rect.width, rect.height, detection.width, detection.height);
+  const px = (clientX - rect.left - fit.x) / fit.scale;
+  const py = (clientY - rect.top - fit.y) / fit.scale;
+  return [clamp01(px / detection.width), clamp01(py / detection.height)];
+}
+
+function updateDraftHint(message) {
+  if (!zoneDraftHint) {
+    return;
+  }
+  if (message) {
+    zoneDraftHint.textContent = message;
+    return;
+  }
+  zoneDraftHint.textContent = state.latestDetection
+    ? `已加入 ${state.editor.draft.length} 點（至少 3 點）`
+    : "等待畫面出現後再點擊繪製";
+}
+
+function setEditor(active) {
+  state.editor.active = active;
+  state.editor.draft = [];
+  if (zoneDraftBar) {
+    zoneDraftBar.hidden = !active;
+  }
+  if (zoneEditToggle) {
+    zoneEditToggle.textContent = active ? "完成編輯" : "編輯";
+  }
+  // The overlay is pointer-events:none by default; enable it only while editing
+  // so normal viewing never intercepts clicks.
+  overlay.style.pointerEvents = active ? "auto" : "";
+  overlay.style.cursor = active ? "crosshair" : "";
+  updateDraftHint();
+}
+
+function onStageClick(event) {
+  if (!state.editor.active) {
+    return;
+  }
+  const point = stageToNormalized(event.clientX, event.clientY);
+  if (!point) {
+    updateDraftHint("等待畫面出現後再點擊繪製");
+    return;
+  }
+  state.editor.draft.push(point);
+  updateDraftHint();
+}
+
+function publicZone(zone) {
+  return { name: zone.name, points: zone.points, anchor: zone.anchor || "center" };
+}
+
+async function finishZone() {
+  if (state.editor.draft.length < 3) {
+    updateDraftHint("至少需要 3 點");
+    return;
+  }
+  const name = (window.prompt("區域名稱", `zone-${state.zones.length + 1}`) || "").trim();
+  if (!name) {
+    return;
+  }
+  const zones = [
+    ...state.zones.map(publicZone),
+    { name, points: state.editor.draft.map(([x, y]) => [round4(x), round4(y)]), anchor: "center" },
+  ];
+  if (await saveZones(zones)) {
+    state.editor.draft = [];
+    updateDraftHint();
+  }
+}
+
+async function deleteZone(name) {
+  await saveZones(state.zones.filter((zone) => zone.name !== name).map(publicZone));
+}
+
+async function saveZones(zones) {
+  try {
+    const response = await fetch("/api/zones", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ zones }),
+    });
+    if (!response.ok) {
+      updateDraftHint("儲存失敗，請檢查頂點");
+      return false;
+    }
+    const payload = await response.json();
+    state.zones = (payload.zones && payload.zones.zones) || [];
+    renderZoneList();
+    return true;
+  } catch {
+    updateDraftHint("無法連線到伺服器");
+    return false;
+  }
+}
+
+function renderZoneList() {
+  if (!zoneList) {
+    return;
+  }
+  zoneList.textContent = "";
+  for (const zone of state.zones) {
+    const item = document.createElement("li");
+    item.className = "zone-list-item";
+    const label = document.createElement("span");
+    label.textContent = `${zone.name} (${(zone.points || []).length})`;
+    item.append(label);
+    if (!demoMode) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "compact-button";
+      remove.textContent = "刪除";
+      remove.addEventListener("click", () => deleteZone(zone.name));
+      item.append(remove);
+    }
+    zoneList.append(item);
+  }
+}
+
 async function pollStatus() {
   if (demoMode) {
     return;
@@ -412,6 +658,18 @@ image.addEventListener("load", () => {
 for (const button of modeButtons) {
   button.addEventListener("click", () => setDetectMode(button.dataset.detectMode));
 }
+
+zoneEditToggle?.addEventListener("click", () => setEditor(!state.editor.active));
+zoneFinishButton?.addEventListener("click", finishZone);
+zoneUndoButton?.addEventListener("click", () => {
+  state.editor.draft.pop();
+  updateDraftHint();
+});
+zoneClearButton?.addEventListener("click", () => {
+  state.editor.draft = [];
+  updateDraftHint();
+});
+overlay.addEventListener("click", onStageClick);
 
 window.addEventListener("resize", resizeOverlay);
 window.addEventListener("beforeunload", releaseImageUrl);
