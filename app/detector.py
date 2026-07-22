@@ -34,6 +34,21 @@ def clamp_xyxy(xyxy: list[float], width: int, height: int) -> list[float]:
     return [x1, y1, x2, y2]
 
 
+def _box_track_id(box: Any) -> int | None:
+    """Return the tracker id for a single result box, or ``None`` when absent.
+
+    ``boxes.id`` is ``None`` until the tracker confirms a track (and always when
+    tracking is off), so this stays defensive against the whole tensor chain.
+    """
+    box_id = getattr(box, "id", None)
+    if box_id is None:
+        return None
+    try:
+        return int(box_id[0].detach().cpu().item())
+    except Exception:
+        return None
+
+
 def detection_error_payload(frame_id: int, message: str) -> dict[str, Any]:
     return {
         "frame_id": frame_id,
@@ -67,6 +82,11 @@ class YoloDetector:
         self._classes: tuple[str, ...] = settings.yolo_classes
         self._conf_thresh: float = settings.conf_thresh
         self._img_size: int = settings.img_size
+        # Multi-object tracking: when on, detect() runs model.track(persist=True)
+        # so each box carries a stable `track_id` across frames. Fixed at launch
+        # (per-model tracker state makes a mid-stream toggle a footgun).
+        self._track_enabled: bool = settings.yolo_track
+        self._tracker: str = settings.yolo_tracker
         # Optional second-stage classifier: when a model name is set, every
         # detection box is cropped and classified so each box gets a fine-grained
         # `species` label on top of its coarse detection `label`. Empty = off.
@@ -283,6 +303,8 @@ class YoloDetector:
             "warmup_ms": self._warmup_ms,
             "conf_thresh": self._conf_thresh,
             "img_size": self._img_size,
+            "track_enabled": self._track_enabled,
+            "tracker": self._tracker,
             "classifier_model": self._classifier_name,
             "classifier_enabled": bool(self._classifier_name),
             "classifier_loaded": self._classifier_model is not None,
@@ -304,7 +326,7 @@ class YoloDetector:
 
         started = time.perf_counter()
         try:
-            results = self._predict(model, decoded.data)
+            results = self._infer(model, decoded.data)
         except Exception as exc:
             raise DetectionError(f"YOLO inference failed: {exc}") from exc
 
@@ -478,6 +500,21 @@ class YoloDetector:
         with self._inference_context():
             return model.predict(**self._prediction_kwargs(source))
 
+    def _infer(self, model: Any, source: Any) -> Any:
+        """Run detection for a live frame, tracking when enabled.
+
+        ``model.track(persist=True)`` keeps the tracker state across calls so
+        boxes get a stable ``track_id``; with tracking off it degrades to the
+        stateless ``predict`` path. Warmup deliberately stays on ``_predict`` so
+        it never seeds the tracker with blank frames.
+        """
+        if not self._track_enabled:
+            return self._predict(model, source)
+        with self._inference_context():
+            return model.track(
+                persist=True, tracker=self._tracker, **self._prediction_kwargs(source)
+            )
+
     def _synchronize_device(self) -> None:
         if not device_supports_half(self._device):
             return
@@ -638,6 +675,9 @@ class YoloDetector:
                     "class_id": class_id,
                     "label": self._names.get(class_id, str(class_id)),
                     "confidence": round(confidence, 4),
+                    # None until the tracker confirms this box (or when tracking
+                    # is off / the tracker hasn't assigned an id this frame).
+                    "track_id": _box_track_id(box),
                 }
             )
         return extracted

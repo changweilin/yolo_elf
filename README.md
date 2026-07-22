@@ -24,6 +24,7 @@
 - **單管線、零延遲積壓 / Single low-latency pipeline** — 只保留最新一張畫面的單槽佇列（single-slot queue），舊畫面會被丟棄，確保偵測永遠跟得上即時輸入。
 - **快速 / 精準雙模式 / Fast & Accurate presets** — 可在小型快速模型與大型高精度模型間即時切換（Viewer 的「快速 / 精準」切換或 `POST /api/detector/mode`），無需重啟。
 - **執行階段調參 / Runtime tuning** — Settings 頁面可即時修改模型、類別、信心門檻與影像尺寸，立即生效。
+- **多物件追蹤 / Multi-object tracking** — 內建 ByteTrack / BoT-SORT，跨影格為每個物件維持穩定 `track_id`，標籤以 `#id` 顯示、錄影中繼資料一併記錄；可 `YOLO_TRACK=0` 關閉。
 - **開放詞彙偵測 / Open-vocabulary detection** — 支援 YOLO-World / YOLOE 模型，以文字提示（如 `person,backpack,fire extinguisher`）自訂偵測類別。
 - **第二階段分類器 / Second-stage classifier** — 選用的圖鑑模式：裁切每個偵測框並分類，為物件標註物種 / 細分類別。
 - **多檢視端廣播 / Unlimited viewers** — 一次只有一個錄影端，但檢視端數量不限，全部接收相同畫面。
@@ -193,6 +194,8 @@ Behaviour is driven by environment variables. The most common ones:
 | `YOLO_CLASSES` | _(空 / empty)_ | 開放詞彙模型（YOLO-World / YOLOE）的逗號分隔提示類別。留空維持模型內建詞彙；需搭配 `-world`/`-worldv2` 模型，封閉集偵測器會忽略。範例：`person,backpack,fire extinguisher`。 |
 | `YOLO_DEVICE` | `auto` | `auto`、`cpu`、`0` 或其他 Ultralytics 裝置目標。 |
 | `YOLO_HALF` | `1` | 對支援的 CUDA 裝置啟用 FP16（CPU 忽略）。 |
+| `YOLO_TRACK` | `1` | 多物件追蹤：跨影格為每個框指派穩定的 `track_id`，Viewer／Recorder 標籤會以 `#id` 前綴顯示，錄影 sidecar 亦記錄。設 `0` 退回逐格獨立偵測。 |
+| `YOLO_TRACKER` | `bytetrack.yaml` | 追蹤器設定。`bytetrack.yaml` 較輕量；`botsort.yaml` 加入 ReID 但成本較高。 |
 | `YOLO_WARMUP` | `0` | 啟動時預熱偵測器。 |
 | `CONF_THRESH` | `0.2` | 偵測信心門檻。越低召回越高、誤判越多。 |
 | `IMG_SIZE` | `1280` | 偵測影像尺寸。越大對小 / 遠物件越有利但越慢。 |

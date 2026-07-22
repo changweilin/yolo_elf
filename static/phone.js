@@ -75,9 +75,9 @@ const demoDetection = {
   height: 720,
   inference_ms: 18.6,
   boxes: [
-    { xyxy: [124, 137, 392, 535], class_id: 0, label: "monitor", confidence: 0.88 },
-    { xyxy: [489, 302, 633, 514], class_id: 1, label: "bottle", confidence: 0.76 },
-    { xyxy: [759, 219, 1062, 521], class_id: 2, label: "package", confidence: 0.93 },
+    { xyxy: [124, 137, 392, 535], class_id: 0, label: "monitor", confidence: 0.88, track_id: 1 },
+    { xyxy: [489, 302, 633, 514], class_id: 1, label: "bottle", confidence: 0.76, track_id: 2 },
+    { xyxy: [759, 219, 1062, 521], class_id: 2, label: "package", confidence: 0.93, track_id: 3 },
   ],
 };
 
@@ -919,6 +919,7 @@ function collectRecordingDetection(detection) {
     class_id: Number(box.class_id ?? 0),
     label: String(box.label ?? box.class_id ?? ""),
     confidence: roundMetric(box.confidence ?? 0, 4),
+    track_id: box.track_id ?? null,
     xywh: xyxyToXywh(box.xyxy),
     xyxy: (box.xyxy || []).map((value) => roundMetric(value)),
   }));
@@ -1866,7 +1867,8 @@ function drawBoxes(ctx, detection, stageWidth, stageHeight) {
     const top = fit.y + y1 * fit.scale;
     const right = fit.x + x2 * fit.scale;
     const bottom = fit.y + y2 * fit.scale;
-    const label = `${box.label} ${(box.confidence * 100).toFixed(0)}%`;
+    const idPrefix = box.track_id != null ? `#${box.track_id} ` : "";
+    const label = `${idPrefix}${box.label} ${(box.confidence * 100).toFixed(0)}%`;
 
     ctx.strokeStyle = color;
     ctx.fillStyle = color;

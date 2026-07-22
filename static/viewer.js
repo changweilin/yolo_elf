@@ -38,9 +38,9 @@ const demoDetection = {
   height: 720,
   inference_ms: 18.6,
   boxes: [
-    { xyxy: [124, 137, 392, 535], class_id: 0, label: "monitor", confidence: 0.88 },
-    { xyxy: [489, 302, 633, 514], class_id: 1, label: "bottle", confidence: 0.76 },
-    { xyxy: [759, 219, 1062, 521], class_id: 2, label: "package", confidence: 0.93 },
+    { xyxy: [124, 137, 392, 535], class_id: 0, label: "monitor", confidence: 0.88, track_id: 1 },
+    { xyxy: [489, 302, 633, 514], class_id: 1, label: "bottle", confidence: 0.76, track_id: 2 },
+    { xyxy: [759, 219, 1062, 521], class_id: 2, label: "package", confidence: 0.93, track_id: 3 },
   ],
   error: "",
 };
@@ -303,10 +303,12 @@ function drawBoxes(ctx, detection, stageWidth, stageHeight) {
     const right = fit.x + x2 * fit.scale;
     const bottom = fit.y + y2 * fit.scale;
     // When the second-stage classifier named a species, show that as the
-    // primary label (圖鑑); otherwise fall back to the detection class.
+    // primary label (圖鑑); otherwise fall back to the detection class. A
+    // tracker id (when present) is prefixed so an object is followable.
+    const idPrefix = box.track_id != null ? `#${box.track_id} ` : "";
     const label = box.species
-      ? `${box.species} ${Math.round((box.species_confidence ?? 0) * 100)}%`
-      : `${box.label} ${(box.confidence * 100).toFixed(0)}%`;
+      ? `${idPrefix}${box.species} ${Math.round((box.species_confidence ?? 0) * 100)}%`
+      : `${idPrefix}${box.label} ${(box.confidence * 100).toFixed(0)}%`;
 
     ctx.strokeStyle = color;
     ctx.fillStyle = color;

@@ -102,6 +102,8 @@ class Settings:
     yolo_classes: tuple[str, ...]
     yolo_device: str
     yolo_half: bool
+    yolo_track: bool
+    yolo_tracker: str
     yolo_warmup: bool
     yolo_warmup_runs: int
     conf_thresh: float
@@ -138,6 +140,12 @@ def get_settings() -> Settings:
         yolo_classes=_list_env("YOLO_CLASSES"),
         yolo_device=os.getenv("YOLO_DEVICE", "auto"),
         yolo_half=_bool_env("YOLO_HALF", True),
+        # Multi-object tracking: assign a stable `track_id` to each box across
+        # frames via Ultralytics' built-in tracker. Off falls back to stateless
+        # per-frame detection. YOLO_TRACKER picks the tracker config (bytetrack
+        # is lighter; botsort.yaml adds ReID at higher cost).
+        yolo_track=_bool_env("YOLO_TRACK", True),
+        yolo_tracker=os.getenv("YOLO_TRACKER", "bytetrack.yaml").strip() or "bytetrack.yaml",
         yolo_warmup=_bool_env("YOLO_WARMUP", False),
         yolo_warmup_runs=_bounded_int_env("YOLO_WARMUP_RUNS", 1, 1, 10),
         conf_thresh=_bounded_float_env("CONF_THRESH", 0.2, 0.0, 1.0),

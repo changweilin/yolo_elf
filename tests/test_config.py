@@ -11,6 +11,8 @@ SETTINGS_ENV = [
     "YOLO_CLASSES",
     "YOLO_DEVICE",
     "YOLO_HALF",
+    "YOLO_TRACK",
+    "YOLO_TRACKER",
     "YOLO_WARMUP",
     "YOLO_WARMUP_RUNS",
     "CONF_THRESH",
@@ -52,6 +54,8 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
     assert settings.yolo_model_accurate == "yolov8x.pt"
     assert settings.yolo_classes == ()
     assert settings.yolo_half is True
+    assert settings.yolo_track is True
+    assert settings.yolo_tracker == "bytetrack.yaml"
     assert settings.conf_thresh == 0.2
     assert settings.img_size == 1280
     assert settings.classifier_model == ""
@@ -75,6 +79,8 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     monkeypatch.setenv("CLASSIFIER_MIN_CONF", "0.4")
     monkeypatch.setenv("CLASSIFIER_MAX_BOXES", "3")
     monkeypatch.setenv("YOLO_HALF", "true")
+    monkeypatch.setenv("YOLO_TRACK", "off")
+    monkeypatch.setenv("YOLO_TRACKER", "botsort.yaml")
     monkeypatch.setenv("YOLO_WARMUP", "1")
     monkeypatch.setenv("YOLO_WARMUP_RUNS", "2")
     monkeypatch.setenv("FRAME_FPS", "30")
@@ -99,6 +105,8 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     assert settings.classifier_min_conf == 0.4
     assert settings.classifier_max_boxes == 3
     assert settings.yolo_half is True
+    assert settings.yolo_track is False
+    assert settings.yolo_tracker == "botsort.yaml"
     assert settings.yolo_warmup is True
     assert settings.yolo_warmup_runs == 2
     assert settings.frame_fps == 30
@@ -130,6 +138,7 @@ def test_yolo_classes_parses_comma_separated_prompts(monkeypatch):
         ("PORT", "70000"),
         ("DETECT_MODE", "ultra"),
         ("YOLO_HALF", "maybe"),
+        ("YOLO_TRACK", "maybe"),
         ("YOLO_WARMUP", "warm"),
         ("YOLO_WARMUP_RUNS", "0"),
         ("CONF_THRESH", "1.5"),

@@ -15,6 +15,8 @@ def _detector(monkeypatch):
         "YOLO_MODEL",
         "YOLO_MODEL_ACCURATE",
         "YOLO_CLASSES",
+        "YOLO_TRACK",
+        "YOLO_TRACKER",
         "CLASSIFIER_MODEL",
         "CLASSIFIER_MIN_CONF",
     ):
@@ -35,6 +37,58 @@ class _FakeWorldModel:
 class _FakeClosedModel:
     def __init__(self):
         self.names = {0: "person"}
+
+
+class _FakeScalar:
+    """Mimics the box-tensor cell chain: ``.detach().cpu().item()/.tolist()``."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def item(self):
+        return self._value
+
+    def tolist(self):
+        return self._value
+
+
+class _FakeResultBox:
+    def __init__(self, xyxy, class_id, confidence, track_id=None):
+        self.xyxy = [_FakeScalar(list(xyxy))]
+        self.cls = [_FakeScalar(class_id)]
+        self.conf = [_FakeScalar(confidence)]
+        # `boxes.id` is None until the tracker confirms the track (and always
+        # when tracking is off), matching the Ultralytics contract.
+        self.id = None if track_id is None else [_FakeScalar(track_id)]
+
+
+class _FakeDetectResult:
+    def __init__(self, boxes):
+        self.boxes = boxes
+
+
+class _FakeRoutingModel:
+    """Records whether detect() reached ``track`` vs ``predict``."""
+
+    def __init__(self):
+        self.predict_calls = 0
+        self.track_calls = 0
+        self.last_track_kwargs = None
+
+    def predict(self, **kwargs):
+        self.predict_calls += 1
+        return ["predict"]
+
+    def track(self, **kwargs):
+        self.track_calls += 1
+        self.last_track_kwargs = kwargs
+        return ["track"]
 
 
 class _FakeProbs:
@@ -315,6 +369,60 @@ def test_classify_boxes_skips_degenerate_crops(monkeypatch):
     assert "species" not in boxes[0]
     # No valid crop means the classifier is never invoked.
     assert classifier.received is None
+
+
+def test_status_reports_tracking_defaults(monkeypatch):
+    status = _detector(monkeypatch).status()
+    assert status["track_enabled"] is True
+    assert status["tracker"] == "bytetrack.yaml"
+
+
+def test_extract_boxes_includes_tracker_id(monkeypatch):
+    detector = _detector(monkeypatch)
+    detector._names = {0: "person"}
+    result = _FakeDetectResult([_FakeResultBox([10, 20, 30, 40], 0, 0.91, track_id=7)])
+
+    boxes = detector._extract_boxes(result, 100, 100)
+
+    assert boxes[0]["track_id"] == 7
+    assert boxes[0]["label"] == "person"
+    assert boxes[0]["xyxy"] == [10.0, 20.0, 30.0, 40.0]
+
+
+def test_extract_boxes_track_id_none_when_untracked(monkeypatch):
+    detector = _detector(monkeypatch)
+    detector._names = {5: "dog"}
+    result = _FakeDetectResult([_FakeResultBox([0, 0, 10, 10], 5, 0.5, track_id=None)])
+
+    boxes = detector._extract_boxes(result, 50, 50)
+
+    assert boxes[0]["track_id"] is None
+
+
+def test_infer_tracks_when_enabled(monkeypatch):
+    detector = _detector(monkeypatch)
+    detector._track_enabled = True
+    detector._tracker = "bytetrack.yaml"
+    model = _FakeRoutingModel()
+
+    detector._infer(model, "src")
+
+    assert model.track_calls == 1
+    assert model.predict_calls == 0
+    assert model.last_track_kwargs["persist"] is True
+    assert model.last_track_kwargs["tracker"] == "bytetrack.yaml"
+    assert model.last_track_kwargs["source"] == "src"
+
+
+def test_infer_predicts_when_tracking_disabled(monkeypatch):
+    detector = _detector(monkeypatch)
+    detector._track_enabled = False
+    model = _FakeRoutingModel()
+
+    detector._infer(model, "src")
+
+    assert model.predict_calls == 1
+    assert model.track_calls == 0
 
 
 def test_clamp_xyxy_keeps_boxes_inside_image():

@@ -35,6 +35,18 @@ $env:YOLO_DEVICE = "0"
 起始模式由 `DETECT_MODE` 決定（預設 `fast`）。切到精準模式後，下一張影格才會載入較大的模型，
 因此第一張的延遲會略高，之後維持快取不再重載。
 
+## 物件追蹤（track_id）
+
+預設開啟（`YOLO_TRACK=1`）：偵測改用 Ultralytics 內建追蹤器（`model.track(persist=True)`），
+跨影格為每個物件維持穩定 `track_id`。Viewer／Recorder 疊圖以 `#id` 前綴標示，錄影的
+`.detections.json` sidecar 每個框也會帶 `track_id`，方便事後統計進出、停留時間、軌跡。
+
+- **追蹤器**：`YOLO_TRACKER` 預設 `bytetrack.yaml`（輕量、即時優先）；改 `botsort.yaml` 可加入
+  ReID（外觀特徵）在遮擋後更容易接回同一 id，但成本較高。
+- **關閉**：`YOLO_TRACK=0`（或 `run.ps1 -Track off`）退回逐格獨立偵測，`track_id` 為 `null`。
+- 追蹤狀態是每個模型各自維護：切換 快速／精準 模式時 id 不會延續。這是啟動時的設定，
+  不透過設定頁即時切換（避免追蹤器狀態殘留造成誤判）。
+
 ## 換用更多類別 / 專用模型
 
 `YOLO_MODEL` 與 `YOLO_MODEL_ACCURATE` 可指向任何 Ultralytics 格式的偵測權重，框體格式相容、

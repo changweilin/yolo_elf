@@ -10,6 +10,9 @@ param(
     [string]$Classes,
     [double]$ConfThresh,
     [int]$ImgSize,
+    # Multi-object tracking (stable per-object ids across frames). Defaults on.
+    [ValidateSet("on", "off")]
+    [string]$Track,
     [switch]$Reload
 )
 
@@ -41,6 +44,7 @@ if ($PSBoundParameters.ContainsKey("AccurateModel")) { $env:YOLO_MODEL_ACCURATE 
 if ($PSBoundParameters.ContainsKey("Classes"))       { $env:YOLO_CLASSES = $Classes }
 if ($PSBoundParameters.ContainsKey("ConfThresh"))    { $env:CONF_THRESH = [string]$ConfThresh }
 if ($PSBoundParameters.ContainsKey("ImgSize"))       { $env:IMG_SIZE = [string]$ImgSize }
+if ($PSBoundParameters.ContainsKey("Track"))         { $env:YOLO_TRACK = $Track }
 
 $UvicornArgs = @("-m", "uvicorn", "app.main:app", "--host", $HostName, "--port", [string]$Port)
 if ($Reload) {
