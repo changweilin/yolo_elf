@@ -26,6 +26,7 @@
 - **執行階段調參 / Runtime tuning** — Settings 頁面可即時修改模型、類別、信心門檻與影像尺寸，立即生效。
 - **多物件追蹤 / Multi-object tracking** — 內建 ByteTrack / BoT-SORT，跨影格為每個物件維持穩定 `track_id`，標籤以 `#id` 顯示、錄影中繼資料一併記錄；可 `YOLO_TRACK=0` 關閉。
 - **開放詞彙偵測 / Open-vocabulary detection** — 支援 YOLO-World / YOLOE 模型，以文字提示（如 `person,backpack,fire extinguisher`）自訂偵測類別。
+- **規則告警 / Rule-based alerts** — 依規則（類別、數量門檻、信心）在偵測命中時觸發，帶冷卻時間去抖動；即時推送到 Viewer（含選用的瀏覽器通知）並可送出 webhook 串接外部系統。規則可經 `POST /api/alerts` 即時增修。
 - **第二階段分類器 / Second-stage classifier** — 選用的圖鑑模式：裁切每個偵測框並分類，為物件標註物種 / 細分類別。
 - **多檢視端廣播 / Unlimited viewers** — 一次只有一個錄影端，但檢視端數量不限，全部接收相同畫面。
 - **錄影與中繼資料 / Recording & metadata** — 透過瀏覽器 `MediaRecorder` 錄影，可存本機、遠端或兩者，並附帶逐格偵測 `.detections.json` sidecar。
@@ -218,6 +219,12 @@ Behaviour is driven by environment variables. The most common ones:
 | `REMOTE_STORAGE_QUEUE_SIZE` | `100` | 背景遠端上傳佇列大小。 |
 | `REMOTE_STORAGE_TIMEOUT` | `5.0` | 遠端上傳逾時（秒）。 |
 | `REMOTE_STORAGE_RETRIES` | `2` | 每次遠端上傳的重試次數。 |
+| `ALERT_RULES` | _(空 / empty)_ | 規則告警設定，JSON 陣列。每條規則：`name`（必填）、`classes`（逗號字串或陣列，留空＝任意類別）、`min_count`（預設 1）、`min_confidence`（0–1，預設 0）、`cooldown_sec`（預設 `ALERT_COOLDOWN_SEC`）。留空＝停用。範例：`[{"name":"有人","classes":["person"],"min_count":1,"cooldown_sec":30}]`。也可經 `POST /api/alerts` 即時修改。 |
+| `ALERT_COOLDOWN_SEC` | `15` | 未指定 `cooldown_sec` 的規則預設冷卻秒數，避免每格重複觸發。 |
+| `ALERT_WEBHOOK_URL` | _(空 / empty)_ | 選用：告警觸發時 POST 的 webhook 端點。留空則僅推送到 Viewer。為防 SSRF，此端點僅能由環境變數設定，不可經執行階段 API 變更。 |
+| `ALERT_WEBHOOK_TOKEN` | _(空 / empty)_ | webhook 的選用 bearer token。 |
+| `ALERT_WEBHOOK_TIMEOUT` | `5.0` | webhook 逾時（秒）。 |
+| `ALERT_WEBHOOK_RETRIES` | `2` | 每次 webhook 發送的重試次數。 |
 
 > 遠端儲存預設停用，只有設定 `REMOTE_STORAGE_URL` 才會啟用；啟用後伺服器於背景上傳偵測中繼資料，僅在 `REMOTE_STORAGE_INCLUDE_FRAME=1` 時包含畫面。
 > Remote storage is disabled unless `REMOTE_STORAGE_URL` is set; frames are included only when `REMOTE_STORAGE_INCLUDE_FRAME=1`.
@@ -247,6 +254,8 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `POST /api/detector/mode` | 切換 preset。Body：`{"mode": "fast"}` 或 `{"mode": "accurate"}`。 |
 | `GET /api/detector/config` | 目前偵測器設定 / current detector configuration. |
 | `POST /api/detector/config` | 執行階段更新設定（部分更新，只變更傳入的鍵）/ partial runtime update. |
+| `GET /api/alerts` | 目前告警規則與觸發狀態 / current alert rules and firing state. |
+| `POST /api/alerts` | 執行階段替換告警規則。Body：`{"rules": [...]}` 或直接傳陣列 / replace alert rules at runtime. |
 | `POST /api/recordings` | 上傳錄影，依 `X-Yolo-Elf-Storage-Mode` 標頭路由儲存 / upload a recording. |
 | `POST /api/recordings/{id}/metadata` | 為錄影附加逐格偵測 sidecar / attach detection sidecar. |
 | `GET /api/recordings/{id}` | 下載已儲存的錄影 / download a recording. |
@@ -257,7 +266,7 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | 路由 / Route | 流向 / Flow | 內容 / Payload |
 | --- | --- | --- |
 | `/ws/camera` | recorder → server | 二進位 JPEG 畫面；文字 `client_state` 訊息回報儲存模式與錄影狀態。伺服器連線時回覆 `config` 訊息。 |
-| `/ws/viewer` | server → viewer | 每格 JSON 中繼資料後接二進位 JPEG，並可依請求附上 `status` 快照。 |
+| `/ws/viewer` | server → viewer | 每格 JSON 中繼資料後接二進位 JPEG，並可依請求附上 `status` 快照；規則告警觸發時另推送 `alert` 訊息。 |
 
 ---
 
@@ -270,6 +279,7 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `app/stream_state.py` | 串流中樞：錄影端 / 檢視端追蹤、畫面佇列、指標。 |
 | `app/recordings.py` | 錄影上傳、中繼資料 sidecar、本機儲存。 |
 | `app/remote_storage.py` | 偵測中繼資料與錄影的背景上傳佇列。 |
+| `app/alerts.py` | 規則告警引擎：規則評估、冷卻去抖動、webhook 背景發送。 |
 | `app/config.py` | 環境變數驅動的 `Settings` 與驗證。 |
 | `static/` | 瀏覽器頁面與資產（recorder、viewer、settings）。 |
 | `scripts/` | PowerShell / Node 輔助腳本：setup、run、bench、tailscale、靜態建置。 |

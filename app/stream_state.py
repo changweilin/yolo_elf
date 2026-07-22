@@ -143,6 +143,18 @@ class StreamHub:
             if not ok:
                 await self.remove_viewer(viewer)
 
+    async def broadcast_alert(self, events: list[dict[str, Any]]) -> None:
+        """Push fired-alert messages (out of band from frames) to every viewer."""
+        if not events:
+            return
+        async with self._lock:
+            viewers = list(self.viewer_clients)
+        for viewer in viewers:
+            for event in events:
+                if not await self._safe_send_json(viewer, event):
+                    await self.remove_viewer(viewer)
+                    break
+
     async def snapshot(self, detector_status: dict[str, Any] | None = None) -> dict[str, Any]:
         async with self._lock:
             uptime_sec = max(0.0, time.time() - self.started_at)

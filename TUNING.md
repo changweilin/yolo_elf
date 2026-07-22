@@ -47,6 +47,31 @@ $env:YOLO_DEVICE = "0"
 - 追蹤狀態是每個模型各自維護：切換 快速／精準 模式時 id 不會延續。這是啟動時的設定，
   不透過設定頁即時切換（避免追蹤器狀態殘留造成誤判）。
 
+## 規則告警（偵測到就通知）
+
+當偵測命中設定的規則時觸發告警：即時推送到 Viewer（右上 `alerts` 狀態燈會亮、若已授權會跳瀏覽器通知），
+並可送出 webhook 給外部系統（Slack、Home Assistant、自建 endpoint…）。
+
+規則以 JSON 陣列設定，每條欄位：
+
+- `name`（必填）：規則名稱，會出現在告警訊息與狀態中。
+- `classes`：要比對的偵測標籤（逗號字串或陣列）；留空＝任意類別。
+- `min_count`：命中框數達到才觸發（預設 `1`）。
+- `min_confidence`：低於此信心的框不計入（預設 `0`）。
+- `cooldown_sec`：同一規則兩次觸發的最短間隔，避免每格狂噴（未填用 `ALERT_COOLDOWN_SEC`，預設 15 秒）。
+
+```powershell
+# 一有人就通知，最短間隔 30 秒
+$env:ALERT_RULES = '[{"name":"有人","classes":["person"],"cooldown_sec":30}]'
+# 選用：把告警 POST 到 webhook（含 bearer token）
+$env:ALERT_WEBHOOK_URL = "https://hooks.example/yolo"
+$env:ALERT_WEBHOOK_TOKEN = "secret"
+```
+
+不必重啟也能改規則：`POST /api/alerts`，body 為 `{"rules":[...]}`（或直接傳陣列）；
+`GET /api/alerts`、`/api/status` 的 `alerts` 欄位可看目前規則、觸發次數與最近事件。
+webhook 端點基於安全（SSRF 防護）**只能**用環境變數設定，不能透過執行階段 API 變更。
+
 ## 換用更多類別 / 專用模型
 
 `YOLO_MODEL` 與 `YOLO_MODEL_ACCURATE` 可指向任何 Ultralytics 格式的偵測權重，框體格式相容、

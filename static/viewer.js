@@ -6,6 +6,7 @@ const cameraLinkStatus = document.querySelector("#cameraLinkStatus");
 const phoneStorageStatus = document.querySelector("#phoneStorageStatus");
 const modelStatus = document.querySelector("#modelStatus");
 const storageStatus = document.querySelector("#storageStatus");
+const alertStatus = document.querySelector("#alertStatus");
 const frameMetric = document.querySelector("#frameMetric");
 const boxesMetric = document.querySelector("#boxesMetric");
 const inferenceMetric = document.querySelector("#inferenceMetric");
@@ -94,6 +95,10 @@ function connectViewer() {
       state.pendingFrame = payload;
       return;
     }
+    if (payload.type === "alert") {
+      handleAlert(payload);
+      return;
+    }
     if (payload.type === "status") {
       renderStatus(payload.status);
     }
@@ -119,6 +124,7 @@ function renderDemoViewer() {
   setChip(phoneStorageStatus, "storage frozen", "warn");
   setChip(modelStatus, "demo snapshot", "warn");
   setChip(storageStatus, "storage frozen", "warn");
+  setChip(alertStatus, "⚠ person ×2 (demo)", "bad");
   for (const button of modeButtons) {
     button.disabled = true;
   }
@@ -211,8 +217,54 @@ function renderStatus(status) {
   } else {
     setChip(storageStatus, "remote storage off", "warn");
   }
+  renderAlerts(status.alerts);
   if (status.last_error) {
     renderError(status.last_error);
+  }
+}
+
+// Keep a just-fired alert on screen briefly instead of letting the 1s status
+// poll immediately reset the chip back to its steady "armed" state.
+const alertFlash = { until: 0 };
+
+function handleAlert(event) {
+  if (!alertStatus) {
+    return;
+  }
+  setChip(alertStatus, `⚠ ${event.rule} ×${event.count}`, "bad");
+  alertFlash.until = Date.now() + 6000;
+  notifyBrowser(event);
+}
+
+function renderAlerts(alerts) {
+  if (!alertStatus || Date.now() < alertFlash.until) {
+    return;
+  }
+  if (!alerts || !alerts.enabled) {
+    setChip(alertStatus, "alerts off", "warn");
+    return;
+  }
+  const fired = alerts.events_fired || 0;
+  setChip(alertStatus, fired ? `alerts armed · ${fired}` : "alerts armed", "good");
+}
+
+function notifyBrowser(event) {
+  if (typeof Notification === "undefined") {
+    return;
+  }
+  const show = () => {
+    try {
+      new Notification("YOLO Elf", { body: `${event.rule} ×${event.count}` });
+    } catch {
+      // Notifications are best-effort; ignore construction failures.
+    }
+  };
+  if (Notification.permission === "granted") {
+    show();
+  } else if (Notification.permission === "default") {
+    Notification.requestPermission()
+      .then((permission) => permission === "granted" && show())
+      .catch(() => {});
   }
 }
 

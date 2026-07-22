@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.alerts import AlertEngine
 from app.config import Settings, get_settings
 from app.detector import DetectionError, YoloDetector, detection_error_payload
 from app.recordings import RecordingStore, recording_storage_mode
@@ -35,6 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     hub = StreamHub(resolved_settings)
     recording_store = RecordingStore(resolved_settings)
     remote_storage = RemoteStorage(resolved_settings)
+    alert_engine = AlertEngine(resolved_settings)
 
     async def detection_worker() -> None:
         while True:
@@ -53,11 +55,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             await hub.publish_detection(frame, detection, processing_started_at)
             await remote_storage.submit(frame, detection)
+            events = await alert_engine.process(frame, detection)
+            if events:
+                await hub.broadcast_alert(events)
 
     async def status_payload() -> dict[str, Any]:
         status = await hub.snapshot(detector.status())
         status["recordings"] = await recording_store.snapshot()
         status["remote_storage"] = await remote_storage.snapshot()
+        status["alerts"] = await alert_engine.snapshot()
         return status
 
     @asynccontextmanager
@@ -67,9 +73,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         api.state.hub = hub
         api.state.recording_store = recording_store
         api.state.remote_storage = remote_storage
+        api.state.alert_engine = alert_engine
         if resolved_settings.yolo_warmup:
             await asyncio.to_thread(detector.warmup)
         await remote_storage.start()
+        await alert_engine.start()
         worker = asyncio.create_task(detection_worker())
         try:
             yield
@@ -80,6 +88,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             except asyncio.CancelledError:
                 pass
             await remote_storage.stop()
+            await alert_engine.stop()
 
     api = FastAPI(title="YOLO Elf", version="0.1.0", lifespan=lifespan)
     api.mount("/static", StaticFiles(directory=resolved_settings.static_dir), name="static")
@@ -163,6 +172,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # settings-page progress bar can poll `/api/status` for readiness.
         asyncio.create_task(asyncio.to_thread(detector.preload))
         return {"type": "detector_config", "detector": detector.status()}
+
+    @api.get("/api/alerts")
+    async def api_alerts_get() -> dict[str, Any]:
+        return {"type": "alerts", "alerts": await alert_engine.snapshot()}
+
+    @api.post("/api/alerts")
+    async def api_alerts_set(request: Request) -> dict[str, Any]:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        # Accept either {"rules": [...]} or a bare [...] array. The webhook target
+        # stays env-only and is never settable here (SSRF guard).
+        rules = body.get("rules") if isinstance(body, dict) else body
+        try:
+            await alert_engine.set_rules(rules)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"type": "alerts", "alerts": await alert_engine.snapshot()}
 
     @api.post("/api/recordings")
     async def api_recordings(request: Request) -> dict[str, Any]:

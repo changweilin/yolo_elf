@@ -127,6 +127,12 @@ class Settings:
     remote_storage_queue_size: int
     remote_storage_timeout: float
     remote_storage_retries: int
+    alert_rules_json: str
+    alert_webhook_url: str
+    alert_webhook_token: str
+    alert_cooldown_sec: float
+    alert_webhook_timeout: float
+    alert_webhook_retries: int
     static_dir: Path
 
 
@@ -181,5 +187,15 @@ def get_settings() -> Settings:
         remote_storage_queue_size=_bounded_int_env("REMOTE_STORAGE_QUEUE_SIZE", 100, 1, 10000),
         remote_storage_timeout=_bounded_float_env("REMOTE_STORAGE_TIMEOUT", 5.0, 0.1, 60.0),
         remote_storage_retries=_bounded_int_env("REMOTE_STORAGE_RETRIES", 2, 0, 5),
+        # Alert rules (JSON array) that fire when a detection matches; parsed and
+        # validated by app/alerts.py. Empty = alerts off. The optional webhook is
+        # a dedicated outbound channel (kept separate from remote storage, and
+        # env-only so runtime rule edits can't repoint it — SSRF guard).
+        alert_rules_json=os.getenv("ALERT_RULES", "").strip(),
+        alert_webhook_url=os.getenv("ALERT_WEBHOOK_URL", "").strip(),
+        alert_webhook_token=os.getenv("ALERT_WEBHOOK_TOKEN", "").strip(),
+        alert_cooldown_sec=_bounded_float_env("ALERT_COOLDOWN_SEC", 15.0, 0.0, 3600.0),
+        alert_webhook_timeout=_bounded_float_env("ALERT_WEBHOOK_TIMEOUT", 5.0, 0.1, 60.0),
+        alert_webhook_retries=_bounded_int_env("ALERT_WEBHOOK_RETRIES", 2, 0, 5),
         static_dir=ROOT_DIR / "static",
     )

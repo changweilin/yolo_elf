@@ -23,6 +23,10 @@ REMOTE_ENV = [
     "REMOTE_STORAGE_QUEUE_SIZE",
     "REMOTE_STORAGE_TIMEOUT",
     "REMOTE_STORAGE_RETRIES",
+    "ALERT_RULES",
+    "ALERT_WEBHOOK_URL",
+    "ALERT_WEBHOOK_TOKEN",
+    "ALERT_COOLDOWN_SEC",
 ]
 
 
@@ -221,6 +225,46 @@ def test_status_includes_stream_metrics():
     assert status["recordings"]["storage_modes"] == ["remote", "local", "both"]
     assert status["recordings"]["recordings_saved"] == 0
     assert status["remote_storage"]["enabled"] is False
+    assert status["alerts"]["enabled"] is False
+    assert status["alerts"]["rules"] == []
+
+
+def test_alerts_default_to_disabled():
+    app = create_app()
+    with TestClient(app) as client:
+        payload = client.get("/api/alerts").json()
+
+    assert payload["type"] == "alerts"
+    assert payload["alerts"]["enabled"] is False
+    assert payload["alerts"]["webhook_enabled"] is False
+    assert payload["alerts"]["rules"] == []
+
+
+def test_alerts_rules_round_trip():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/alerts",
+            json={"rules": [{"name": "person", "classes": ["person"], "min_count": 2}]},
+        )
+        assert response.status_code == 200
+        alerts = response.json()["alerts"]
+        assert alerts["enabled"] is True
+        assert alerts["rules"][0]["name"] == "person"
+        assert alerts["rules"][0]["classes"] == ["person"]
+        assert alerts["rules"][0]["min_count"] == 2
+
+        # The runtime change is reflected in the shared status snapshot.
+        assert client.get("/api/status").json()["alerts"]["enabled"] is True
+
+
+def test_alerts_rejects_invalid_rules():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post("/api/alerts", json={"rules": [{"min_count": 2}]})
+
+    assert response.status_code == 400
+    assert "name" in response.json()["detail"]
 
 
 def test_camera_client_state_is_reflected_in_status():
