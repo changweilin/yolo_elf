@@ -29,7 +29,7 @@ YOLO Elf 是 FastAPI + WebSocket + 靜態前端的即時偵測 app。
 | UI 邏輯事件 | `yolo-elf-ui-events` | `static/phone.js`, `static/viewer.js`, `static/app.css`, `scripts/build-static.mjs` | `npm.cmd run test`, `npm.cmd run build`, browser check |
 | 參數與資料契約管理 | `yolo-elf-config-data` | `app/config.py`, `app/main.py`, `app/remote_storage.py`, tests/docs/scripts | `npm.cmd run test` |
 | 空間運算與數值分析 | `yolo-elf-spatial-metrics` | `app/detector.py`, `app/stream_state.py`, `static/phone.js`, `static/viewer.js`, benchmark scripts | `npm.cmd run test`, `scripts/bench.ps1` |
-| 市場科學化與實驗分析 | `yolo-elf-market-science` | `README.md`, `TUNING.md`, `OPTIMIZATION_PLAN.md`, benchmark/status surfaces | benchmarks plus cited current sources |
+| 市場科學化與實驗分析 | `yolo-elf-market-science` | `README.md`, `TUNING.md`, benchmark/status surfaces | benchmarks plus cited current sources |
 
 ## Market Analysis Caveat
 

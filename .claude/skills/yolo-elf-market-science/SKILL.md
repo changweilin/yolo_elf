@@ -13,7 +13,7 @@ Turn product and performance evidence into testable decisions. This repo has ben
 
 - Product surfaces: `README.md`, `static/phone.html`, `static/viewer.html`, `static/demo-frame.svg`.
 - Performance evidence: `scripts/bench_detector.py`, `scripts/bench.ps1`, `app/stream_state.py`, `app/detector.py`.
-- Tunable parameters: `app/config.py`, `TUNING.md`, `OPTIMIZATION_PLAN.md`.
+- Tunable parameters: `app/config.py`, `TUNING.md`.
 - Privacy and demo constraints: `README.md`, `app/remote_storage.py`, `scripts/build-static.mjs`.
 
 ## Analysis Modes

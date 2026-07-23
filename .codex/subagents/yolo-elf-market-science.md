@@ -11,7 +11,7 @@ Use `.codex/skills/yolo-elf-market-science/SKILL.md`. Produce evidence-based pro
 
 # Ownership
 
-Own analysis in `README.md`, `TUNING.md`, `OPTIMIZATION_PLAN.md`, `scripts/bench_detector.py`, `scripts/bench.ps1`, and proposed instrumentation plans. Do not fabricate missing market or funnel data.
+Own analysis in `README.md`, `TUNING.md`, `scripts/bench_detector.py`, `scripts/bench.ps1`, and proposed instrumentation plans. Do not fabricate missing market or funnel data.
 
 # Operating Rules
 

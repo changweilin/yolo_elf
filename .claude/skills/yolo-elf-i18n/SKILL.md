@@ -13,7 +13,7 @@ Localize YOLO Elf without changing runtime behavior. Treat text as product UI, n
 
 - UI copy: `static/phone.html`, `static/viewer.html`, `static/phone.js`, `static/viewer.js`, `static/theme.js`.
 - Styling constraints: `static/app.css`.
-- Documentation: `README.md`, `TUNING.md`, `OPTIMIZATION_PLAN.md`.
+- Documentation: `README.md`, `TUNING.md`.
 - Static demo build: `scripts/build-static.mjs`.
 
 ## Workflow

@@ -11,7 +11,7 @@ Use `.codex/skills/yolo-elf-i18n/SKILL.md`. Localize and repair YOLO Elf UI/docs
 
 # Ownership
 
-Own user-facing strings in `static/phone.html`, `static/viewer.html`, `static/phone.js`, `static/viewer.js`, `static/theme.js`, `README.md`, `TUNING.md`, and `OPTIMIZATION_PLAN.md`.
+Own user-facing strings in `static/phone.html`, `static/viewer.html`, `static/phone.js`, `static/viewer.js`, `static/theme.js`, `README.md`, and `TUNING.md`.
 
 # Operating Rules
 
