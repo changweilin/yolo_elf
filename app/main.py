@@ -7,13 +7,20 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from app.alerts import AlertEngine
+from app.auth import COOKIE_NAME, AuthGuard
 from app.config import Settings, get_settings
 from app.detector import DetectionError, YoloDetector, detection_error_payload
 from app.events import EventStore, SightingAggregator
+from app.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE, render_metrics
 from app.recordings import RecordingStore, recording_storage_mode
 from app.remote_storage import RemoteStorage
 from app.stream_state import CameraFrame, StreamHub
@@ -42,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     zone_engine = ZoneEngine(resolved_settings)
     event_store = EventStore(resolved_settings)
     sightings = SightingAggregator()
+    auth_guard = AuthGuard(resolved_settings)
 
     async def detection_worker() -> None:
         while True:
@@ -97,6 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         api.state.zone_engine = zone_engine
         api.state.event_store = event_store
         api.state.sightings = sightings
+        api.state.auth_guard = auth_guard
         if resolved_settings.yolo_warmup:
             await asyncio.to_thread(detector.warmup)
         await remote_storage.start()
@@ -128,6 +137,75 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     api = FastAPI(title="YOLO Elf", version="0.1.0", lifespan=lifespan)
     api.mount("/static", StaticFiles(directory=resolved_settings.static_dir), name="static")
+
+    # Paths reachable without a session so the login flow can bootstrap: the
+    # login page + its static assets, the liveness probe, and the credential
+    # exchange itself. Everything else is gated when auth is enabled.
+    auth_exempt_paths = {"/login", "/api/login", "/api/logout", "/health", "/favicon.ico"}
+
+    def _is_auth_exempt(path: str) -> bool:
+        return path in auth_exempt_paths or path.startswith("/static/")
+
+    def _safe_next(target: str | None) -> str:
+        # Local paths only, never a scheme/host, to avoid an open redirect.
+        if target and target.startswith("/") and not target.startswith("//"):
+            return target
+        return "/"
+
+    def _set_session_cookie(response: JSONResponse, request: Request) -> None:
+        response.set_cookie(
+            COOKIE_NAME,
+            auth_guard.issue_cookie(),
+            max_age=auth_guard.ttl,
+            httponly=True,
+            samesite="lax",
+            secure=request.url.scheme == "https",
+            path="/",
+        )
+
+    @api.middleware("http")
+    async def enforce_auth(request: Request, call_next):
+        if auth_guard.enabled and not _is_auth_exempt(request.url.path):
+            if not auth_guard.request_ok(request):
+                # Browser navigations get bounced to the login page; API/other
+                # clients get a plain 401 so they can present a credential.
+                if request.method == "GET" and "text/html" in request.headers.get(
+                    "accept", ""
+                ):
+                    return RedirectResponse(
+                        f"/login?next={_safe_next(request.url.path)}"
+                    )
+                return JSONResponse(
+                    {"detail": "Authentication required"}, status_code=401
+                )
+        return await call_next(request)
+
+    @api.get("/login")
+    async def login_page() -> FileResponse:
+        return FileResponse(
+            resolved_settings.static_dir / "login.html",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @api.post("/api/login")
+    async def api_login(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        token = body.get("token") if isinstance(body, dict) else None
+        if not auth_guard.verify_credential(token):
+            # Never echo the attempted token back (keep it out of logs/responses).
+            raise HTTPException(status_code=401, detail="Invalid token")
+        response = JSONResponse({"status": "ok"})
+        _set_session_cookie(response, request)
+        return response
+
+    @api.post("/api/logout")
+    async def api_logout() -> JSONResponse:
+        response = JSONResponse({"status": "ok"})
+        response.delete_cookie(COOKIE_NAME, path="/")
+        return response
 
     @api.get("/")
     async def root() -> RedirectResponse:
@@ -177,6 +255,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.get("/api/status")
     async def api_status() -> dict[str, Any]:
         return await status_payload()
+
+    @api.get("/metrics")
+    async def metrics() -> PlainTextResponse:
+        if not resolved_settings.metrics_enabled:
+            raise HTTPException(status_code=404, detail="Metrics are disabled")
+        return PlainTextResponse(
+            render_metrics(await status_payload()), media_type=METRICS_CONTENT_TYPE
+        )
 
     @api.post("/api/detector/mode")
     async def api_detector_mode(request: Request) -> dict[str, Any]:
@@ -325,6 +411,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.websocket("/ws/camera")
     async def camera_socket(websocket: WebSocket) -> None:
+        # HTTP middleware never sees WS handshakes, so gate them here. The
+        # browser sends the session cookie automatically on same-origin connects.
+        if auth_guard.enabled and not auth_guard.websocket_ok(websocket):
+            await websocket.close(code=1008)
+            return
         await websocket.accept()
         await hub.set_camera(websocket)
         await websocket.send_json(
@@ -368,6 +459,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.websocket("/ws/viewer")
     async def viewer_socket(websocket: WebSocket) -> None:
+        if auth_guard.enabled and not auth_guard.websocket_ok(websocket):
+            await websocket.close(code=1008)
+            return
         await websocket.accept()
         await hub.add_viewer(websocket)
         await websocket.send_json({"type": "status", "status": await status_payload()})

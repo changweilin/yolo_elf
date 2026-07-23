@@ -31,10 +31,14 @@
 - **規則告警 / Rule-based alerts** — 依規則（類別、數量門檻、信心、區域）在偵測命中時觸發，帶冷卻時間去抖動；即時推送到 Viewer（含選用的瀏覽器通知）並可送出 webhook 串接外部系統。規則可經 `POST /api/alerts` 即時增修。
 - **第二階段分類器 / Second-stage classifier** — 選用的圖鑑模式：裁切每個偵測框並分類，為物件標註物種 / 細分類別。
 - **多檢視端廣播 / Unlimited viewers** — 一次只有一個錄影端，但檢視端數量不限，全部接收相同畫面。
+- **檢視端過濾與存圖 / Viewer filters & snapshot** — Viewer 可切換顯示哪些類別、拉一條「最低信心」滑桿（純前端過濾，不動後端偵測），並一鍵「存圖」把當前含框畫面以原始解析度輸出成 PNG。純前端，無需設定或 API。
 - **錄影與中繼資料 / Recording & metadata** — 透過瀏覽器 `MediaRecorder` 錄影，可存本機、遠端或兩者，並附帶逐格偵測 `.detections.json` sidecar。
+- **存取控制 / Access control** — 選用的共享權杖驗證：設定 `AUTH_TOKEN` 後，頁面 / REST / WebSocket 都需驗證。瀏覽器在 `/login` 輸入權杖換取 HttpOnly 簽章 cookie（連 WS 一起認證，權杖不進網址或 log）；程式端可用 `Authorization: Bearer`。留空＝不啟用（維持現狀）。
+- **Prometheus 指標 / Prometheus metrics** — `GET /metrics` 以文字格式輸出既有指標（fps、延遲、丟幀、觀看人數、告警觸發數、活躍 sighting…），可直接接 Prometheus / Grafana。純讀取，可 `METRICS_ENABLED=0` 關閉。
 - **遠端存取 / Remote access** — 內建 Tailscale Serve 輔助指令，讓外網手機透過 HTTPS 擔任錄影端。
 - **靜態展示版 / Static demo** — 一鍵建置隱私安全的 GitHub Pages 展示頁（停用相機、串流與上傳）。
 - **GPU / CPU 自動偵測 / Auto device** — 自動解析 CUDA / CPU 裝置，支援 FP16 半精度推論。
+- **推論加速 / Inference acceleration** — `YOLO_MODEL` 可直接指向預先 export 的 `.engine`（TensorRT）/ `.onnx`；或設 `YOLO_EXPORT=engine|onnx` 讓伺服器首次載入時自動 export `.pt` 並改載入產物（產物會快取；export 失敗自動退回 `.pt`）。另附 `scripts/export_engine.py` 可離線預先 export。
 
 ---
 
@@ -200,6 +204,7 @@ Behaviour is driven by environment variables. The most common ones:
 | `YOLO_HALF` | `1` | 對支援的 CUDA 裝置啟用 FP16（CPU 忽略）。 |
 | `YOLO_TRACK` | `1` | 多物件追蹤：跨影格為每個框指派穩定的 `track_id`，Viewer／Recorder 標籤會以 `#id` 前綴顯示，錄影 sidecar 亦記錄。設 `0` 退回逐格獨立偵測。 |
 | `YOLO_TRACKER` | `bytetrack.yaml` | 追蹤器設定。`bytetrack.yaml` 較輕量；`botsort.yaml` 加入 ReID 但成本較高。 |
+| `YOLO_EXPORT` | _(空 / empty)_ | 首次載入時把 `.pt` 自動 export 成加速格式並改載入產物：`engine`（TensorRT，需 GPU，綁定裝置 + 版本）或 `onnx`。產物快取於 `.pt` 同目錄；export 失敗會退回原 `.pt`（狀態顯示 `last_export_error`）。留空＝直接載入模型名稱（可為預先 export 的 `.engine`/`.onnx`）。 |
 | `YOLO_WARMUP` | `0` | 啟動時預熱偵測器。 |
 | `CONF_THRESH` | `0.2` | 偵測信心門檻。越低召回越高、誤判越多。 |
 | `IMG_SIZE` | `1280` | 偵測影像尺寸。越大對小 / 遠物件越有利但越慢。 |
@@ -232,6 +237,9 @@ Behaviour is driven by environment variables. The most common ones:
 | `EVENT_LOG_ENABLED` | `1` | 啟用偵測歷史：把追蹤到的物件聚合成 per-sighting 紀錄寫入 SQLite，供 `/history` 查詢。設 `0` 關閉。需搭配 `YOLO_TRACK`。 |
 | `EVENT_DB_PATH` | `events.db` | 偵測歷史 SQLite 檔路徑（相對路徑以專案根為基準）。 |
 | `EVENT_EXPIRY_SEC` | `5.0` | 一個 `track_id` 連續未再出現超過此秒數即視為離開，該筆 sighting 定案並寫入資料庫。 |
+| `METRICS_ENABLED` | `1` | 啟用 Prometheus `GET /metrics` 端點（純讀取，把既有指標以文字格式輸出）。設 `0` 則該端點回 404。 |
+| `AUTH_TOKEN` | _(空 / empty)_ | 存取權杖。留空＝完全不啟用驗證（維持現狀）。設定後，頁面 / `/api/*` / `/ws/*` 需帶有效 session cookie（於 `/login` 輸入權杖取得）或 `Authorization: Bearer <token>`。cookie 簽章金鑰由權杖派生，換權杖即令所有既有 session 失效。**（安全規範：驗證機制可實作，但不會代使用者輸入/建立帳密——請自行設定此環境變數。）** |
+| `AUTH_SESSION_TTL` | `604800` | session cookie 有效秒數（預設 7 天）。範圍 60 – 2592000（30 天）。 |
 
 > 遠端儲存預設停用，只有設定 `REMOTE_STORAGE_URL` 才會啟用；啟用後伺服器於背景上傳偵測中繼資料，僅在 `REMOTE_STORAGE_INCLUDE_FRAME=1` 時包含畫面。
 > Remote storage is disabled unless `REMOTE_STORAGE_URL` is set; frames are included only when `REMOTE_STORAGE_INCLUDE_FRAME=1`.
@@ -252,12 +260,16 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `GET /viewer` | 即時畫面 + 偵測框 / live frames + detection boxes. |
 | `GET /settings` | 執行階段偵測器設定 / runtime detector configuration. |
 | `GET /history` | 偵測出現紀錄時間軸 / sighting history timeline. |
+| `GET /login` | 登入頁（啟用 `AUTH_TOKEN` 時輸入權杖）/ login page when auth is on. |
 
 **JSON API**
 
 | 路由 / Route | 用途 / Purpose |
 | --- | --- |
-| `GET /health` | 存活探測 / liveness probe (`{"status": "ok"}`). |
+| `GET /health` | 存活探測 / liveness probe (`{"status": "ok"}`)；驗證豁免。 |
+| `POST /api/login` | 以權杖換取 session cookie。Body：`{"token": "..."}`。驗證失敗回 401。 |
+| `POST /api/logout` | 清除 session cookie / clear the session cookie. |
+| `GET /metrics` | Prometheus 文字格式指標（可接 Grafana）。`METRICS_ENABLED=0` 時回 404。 |
 | `GET /api/status` | 完整執行階段快照：串流統計、偵測器狀態、錄影、遠端儲存。 |
 | `POST /api/detector/mode` | 切換 preset。Body：`{"mode": "fast"}` 或 `{"mode": "accurate"}`。 |
 | `GET /api/detector/config` | 目前偵測器設定 / current detector configuration. |
@@ -293,9 +305,11 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `app/alerts.py` | 規則告警引擎：規則評估、冷卻去抖動、webhook 背景發送。 |
 | `app/zones.py` | ROI 區域引擎：多邊形點內判斷、偵測框區域標記與佔用計數。 |
 | `app/events.py` | 偵測歷史：追蹤結果聚合成 per-sighting 紀錄、SQLite 儲存與查詢。 |
+| `app/metrics.py` | 把 `/api/status` 快照格式化成 Prometheus 文字指標（純函式）。 |
+| `app/auth.py` | 存取控制：共享權杖驗證與簽章 session cookie。 |
 | `app/config.py` | 環境變數驅動的 `Settings` 與驗證。 |
 | `static/` | 瀏覽器頁面與資產（recorder、viewer、settings）。 |
-| `scripts/` | PowerShell / Node 輔助腳本：setup、run、bench、tailscale、靜態建置。 |
+| `scripts/` | PowerShell / Node / Python 輔助腳本：setup、run、bench、tailscale、靜態建置、模型 export（`export_engine.py`）。 |
 | `tests/` | Pytest 測試套件。 |
 | `TUNING.md` | GPU / 精度調校、preset 切換、開放詞彙與分類器完整說明。 |
 

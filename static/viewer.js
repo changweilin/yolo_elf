@@ -59,6 +59,12 @@ const zoneUndoButton = document.querySelector("#zoneUndoButton");
 const zoneClearButton = document.querySelector("#zoneClearButton");
 const zoneList = document.querySelector("#zoneList");
 
+const classFilterList = document.querySelector("#classFilterList");
+const viewerMinConf = document.querySelector("#viewerMinConf");
+const viewerMinConfValue = document.querySelector("#viewerMinConfValue");
+const saveFrameButton = document.querySelector("#saveFrameButton");
+const saveFrameHint = document.querySelector("#saveFrameHint");
+
 const state = {
   ws: null,
   latestDetection: null,
@@ -68,6 +74,10 @@ const state = {
   zones: [],
   zoneCounts: {},
   editor: { active: false, draft: [] },
+  // Viewer-only display filters (never touch the backend / detector).
+  knownClasses: new Set(),
+  hiddenClasses: new Set(),
+  viewerMinConf: 0,
 };
 
 function staticAsset(name) {
@@ -77,6 +87,15 @@ function staticAsset(name) {
 function socketUrl(path) {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}${path}`;
+}
+
+// When access control is on and the session cookie lapses, the server answers
+// fetches with 401 and closes sockets with 1008; bounce back to the login page.
+function redirectToLogin() {
+  if (demoMode) {
+    return;
+  }
+  window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
 }
 
 function setChip(element, text, tone) {
@@ -120,11 +139,17 @@ function connectViewer() {
     }
   });
 
-  ws.addEventListener("close", () => {
+  ws.addEventListener("close", (event) => {
     if (state.ws === ws) {
       state.ws = null;
     }
     state.pendingFrame = null;
+    // 1008 (policy violation) is how the server rejects an unauthenticated WS —
+    // the session cookie is missing or expired, so send the user to log in.
+    if (event.code === 1008) {
+      redirectToLogin();
+      return;
+    }
     setChip(viewerSocketStatus, "viewer offline", "bad");
     state.reconnectTimer = setTimeout(connectViewer, 1200);
   });
@@ -336,6 +361,107 @@ function renderMetrics(detection) {
   boxesMetric.textContent = String(detection.boxes?.length ?? 0);
   inferenceMetric.textContent = `${detection.inference_ms ?? 0} ms`;
   state.zoneCounts = detection.zone_counts || {};
+  collectClasses(detection);
+}
+
+// Class chips are built from labels seen on the stream. New labels default to
+// visible; the chip set only re-renders when the known set actually grows, so a
+// user's toggles survive across frames.
+function collectClasses(detection) {
+  let grew = false;
+  for (const box of detection.boxes || []) {
+    if (box.label && !state.knownClasses.has(box.label)) {
+      state.knownClasses.add(box.label);
+      grew = true;
+    }
+  }
+  if (grew) {
+    renderClassChips();
+  }
+}
+
+function renderClassChips() {
+  if (!classFilterList) {
+    return;
+  }
+  classFilterList.textContent = "";
+  if (!state.knownClasses.size) {
+    const empty = document.createElement("span");
+    empty.className = "settings-hint";
+    empty.textContent = "尚無偵測類別";
+    classFilterList.append(empty);
+    return;
+  }
+  for (const label of Array.from(state.knownClasses).sort()) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "filter-chip";
+    chip.textContent = label;
+    const shown = !state.hiddenClasses.has(label);
+    chip.classList.toggle("is-off", !shown);
+    chip.setAttribute("aria-pressed", shown ? "true" : "false");
+    chip.addEventListener("click", () => {
+      if (state.hiddenClasses.has(label)) {
+        state.hiddenClasses.delete(label);
+      } else {
+        state.hiddenClasses.add(label);
+      }
+      renderClassChips();
+    });
+    classFilterList.append(chip);
+  }
+}
+
+function setViewerMinConf(value) {
+  state.viewerMinConf = clamp01(Number(value) || 0);
+  if (viewerMinConfValue) {
+    viewerMinConfValue.textContent = `${Math.round(state.viewerMinConf * 100)}%`;
+  }
+}
+
+// Composite the current frame + overlay at the source resolution (scale 1, no
+// letterbox offset) so the PNG matches the model's pixels, not the stretched
+// stage. Honors the same class / confidence filters the viewer is showing.
+function saveSnapshot() {
+  const detection = state.latestDetection;
+  if (!detection || !detection.width || !detection.height) {
+    return;
+  }
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = detection.width;
+    canvas.height = detection.height;
+    const ctx = canvas.getContext("2d");
+    const fit = { scale: 1, x: 0, y: 0 };
+    ctx.drawImage(image, 0, 0, detection.width, detection.height);
+    drawZones(ctx, detection, fit);
+    drawBoxes(ctx, detection, fit);
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        showSaveHint("存圖失敗");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `yolo-elf-frame-${detection.frame_id ?? 0}.png`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }, "image/png");
+  } catch {
+    // A cross-origin / tainted frame makes toBlob throw SecurityError.
+    showSaveHint("存圖失敗（畫面受保護）");
+  }
+}
+
+function showSaveHint(message) {
+  if (!saveFrameHint) {
+    return;
+  }
+  saveFrameHint.textContent = message;
+  saveFrameHint.hidden = !message;
 }
 
 function renderError(message) {
@@ -366,20 +492,32 @@ function drawOverlay() {
 
   const detection = state.latestDetection;
   if (detection && detection.width > 0 && detection.height > 0) {
-    drawZones(ctx, detection, width, height);
-    drawBoxes(ctx, detection, width, height);
-    drawDraft(ctx, detection, width, height);
+    const fit = fitContain(width, height, detection.width, detection.height);
+    drawZones(ctx, detection, fit);
+    drawBoxes(ctx, detection, fit);
+    drawDraft(ctx, detection, fit);
   }
   requestAnimationFrame(drawOverlay);
 }
 
-function drawBoxes(ctx, detection, stageWidth, stageHeight) {
-  const fit = fitContain(stageWidth, stageHeight, detection.width, detection.height);
+// Viewer-side visibility: hidden classes and a min-confidence floor are pure
+// display filters — the detector still runs on everything.
+function isBoxVisible(box) {
+  if (state.hiddenClasses.has(box.label)) {
+    return false;
+  }
+  return (box.confidence ?? 0) >= state.viewerMinConf;
+}
+
+function drawBoxes(ctx, detection, fit) {
   ctx.lineWidth = 3;
   ctx.font = "600 14px system-ui, sans-serif";
   ctx.textBaseline = "top";
 
   for (const box of detection.boxes || []) {
+    if (!isBoxVisible(box)) {
+      continue;
+    }
     const color = colorForClass(box.class_id);
     const [x1, y1, x2, y2] = box.xyxy;
     const left = fit.x + x1 * fit.scale;
@@ -439,11 +577,10 @@ function tracePolygon(ctx, points) {
   }
 }
 
-function drawZones(ctx, detection, stageWidth, stageHeight) {
+function drawZones(ctx, detection, fit) {
   if (!state.zones.length) {
     return;
   }
-  const fit = fitContain(stageWidth, stageHeight, detection.width, detection.height);
   ctx.lineWidth = 2;
   ctx.font = "600 13px system-ui, sans-serif";
   ctx.textBaseline = "top";
@@ -472,12 +609,11 @@ function drawZones(ctx, detection, stageWidth, stageHeight) {
   });
 }
 
-function drawDraft(ctx, detection, stageWidth, stageHeight) {
+function drawDraft(ctx, detection, fit) {
   const draft = state.editor.draft;
   if (!state.editor.active || !draft.length) {
     return;
   }
-  const fit = fitContain(stageWidth, stageHeight, detection.width, detection.height);
   const points = draft.map(([nx, ny]) => zonePointToStage(fit, detection, nx, ny));
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#ffd166";
@@ -641,6 +777,10 @@ async function pollStatus() {
 
   try {
     const response = await fetch("/api/status", { cache: "no-store" });
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
     if (response.ok) {
       renderStatus(await response.json());
     }
@@ -671,8 +811,15 @@ zoneClearButton?.addEventListener("click", () => {
 });
 overlay.addEventListener("click", onStageClick);
 
+viewerMinConf?.addEventListener("input", (event) => setViewerMinConf(event.target.value));
+saveFrameButton?.addEventListener("click", saveSnapshot);
+
 window.addEventListener("resize", resizeOverlay);
 window.addEventListener("beforeunload", releaseImageUrl);
+renderClassChips();
+if (viewerMinConf) {
+  setViewerMinConf(viewerMinConf.value);
+}
 connectViewer();
 pollStatus();
 requestAnimationFrame(drawOverlay);

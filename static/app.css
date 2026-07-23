@@ -848,6 +848,61 @@ input[type="range"] {
   font-size: 13px;
 }
 
+.view-filter {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.view-filter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-chip {
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  border-color: var(--primary-border);
+  background: var(--primary-bg);
+  color: var(--text);
+}
+
+.filter-chip.is-off {
+  border-color: var(--line);
+  background: var(--control-bg);
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.filter-conf {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-conf input[type="range"] {
+  flex: 1;
+  width: auto;
+}
+
+.filter-conf-value {
+  min-width: 38px;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: right;
+}
+
 .history-filters {
   display: flex;
   flex-wrap: wrap;

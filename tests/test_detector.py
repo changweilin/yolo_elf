@@ -1,3 +1,7 @@
+import sys
+import types
+from pathlib import Path
+
 import pytest
 
 from app.config import get_settings
@@ -17,11 +21,64 @@ def _detector(monkeypatch):
         "YOLO_CLASSES",
         "YOLO_TRACK",
         "YOLO_TRACKER",
+        "YOLO_EXPORT",
         "CLASSIFIER_MODEL",
         "CLASSIFIER_MIN_CONF",
     ):
         monkeypatch.delenv(name, raising=False)
     return YoloDetector(get_settings())
+
+
+def test_export_target_is_a_pure_path_decision():
+    target = YoloDetector._export_target
+    # export disabled -> load the name as-is
+    assert target("yolov8s.pt", "") is None
+    # a .pt gets the matching artifact suffix, directory preserved
+    assert target("yolov8s.pt", "engine") == Path("yolov8s.engine")
+    assert target("yolov8s.pt", "onnx") == Path("yolov8s.onnx")
+    assert target("weights/yolov8x.pt", "onnx") == Path("weights/yolov8x.onnx")
+    # an already-exported artifact is never re-exported
+    assert target("yolov8s.engine", "engine") is None
+    assert target("yolov8s.onnx", "engine") is None
+    # unknown format -> no export
+    assert target("yolov8s.pt", "trt") is None
+
+
+def test_resolve_model_source_passthrough_when_disabled(monkeypatch):
+    monkeypatch.delenv("YOLO_EXPORT", raising=False)
+    detector = YoloDetector(get_settings())
+    assert detector._resolve_model_source("yolov8s.pt") == "yolov8s.pt"
+
+
+def test_resolve_model_source_reuses_cached_artifact(monkeypatch, tmp_path):
+    monkeypatch.setenv("YOLO_EXPORT", "onnx")
+    detector = YoloDetector(get_settings())
+    source = tmp_path / "model.pt"
+    artifact = tmp_path / "model.onnx"
+    artifact.write_bytes(b"stub")
+    # a cached export on disk is loaded without importing/exporting
+    assert detector._resolve_model_source(str(source)) == str(artifact)
+    assert detector._export_error is None
+
+
+def test_resolve_model_source_falls_back_when_export_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("YOLO_EXPORT", "onnx")
+    detector = YoloDetector(get_settings())
+
+    class _BoomYOLO:
+        def __init__(self, name):
+            self.name = name
+
+        def export(self, **kwargs):
+            raise RuntimeError("no toolchain")
+
+    fake = types.ModuleType("ultralytics")
+    fake.YOLO = _BoomYOLO
+    monkeypatch.setitem(sys.modules, "ultralytics", fake)
+
+    source = tmp_path / "model.pt"  # no cached artifact -> triggers the export attempt
+    assert detector._resolve_model_source(str(source)) == str(source)
+    assert "failed" in (detector._export_error or "")
 
 
 class _FakeWorldModel:

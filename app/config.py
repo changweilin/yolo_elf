@@ -104,6 +104,7 @@ class Settings:
     yolo_half: bool
     yolo_track: bool
     yolo_tracker: str
+    yolo_export: str
     yolo_warmup: bool
     yolo_warmup_runs: int
     conf_thresh: float
@@ -137,6 +138,9 @@ class Settings:
     event_log_enabled: bool
     event_db_path: Path
     event_expiry_sec: float
+    metrics_enabled: bool
+    auth_token: str
+    auth_session_ttl: int
     static_dir: Path
 
 
@@ -156,6 +160,11 @@ def get_settings() -> Settings:
         # is lighter; botsort.yaml adds ReID at higher cost).
         yolo_track=_bool_env("YOLO_TRACK", True),
         yolo_tracker=os.getenv("YOLO_TRACKER", "bytetrack.yaml").strip() or "bytetrack.yaml",
+        # Inference acceleration. Empty = load the model name as-is (a `.pt`, or a
+        # pre-exported `.engine`/`.onnx` you point YOLO_MODEL at). "engine"/"onnx"
+        # auto-export a `.pt` on first load and load the product instead. The
+        # export artifact is cached on disk; a failed export falls back to the .pt.
+        yolo_export=_choice_env("YOLO_EXPORT", "", ("", "engine", "onnx")),
         yolo_warmup=_bool_env("YOLO_WARMUP", False),
         yolo_warmup_runs=_bounded_int_env("YOLO_WARMUP_RUNS", 1, 1, 10),
         conf_thresh=_bounded_float_env("CONF_THRESH", 0.2, 0.0, 1.0),
@@ -212,5 +221,16 @@ def get_settings() -> Settings:
         event_log_enabled=_bool_env("EVENT_LOG_ENABLED", True),
         event_db_path=_path_env("EVENT_DB_PATH", ROOT_DIR / "events.db"),
         event_expiry_sec=_bounded_float_env("EVENT_EXPIRY_SEC", 5.0, 0.5, 3600.0),
+        # Prometheus /metrics endpoint. On by default; set 0 to return 404 there.
+        metrics_enabled=_bool_env("METRICS_ENABLED", True),
+        # Optional access control. Empty AUTH_TOKEN = auth disabled (current
+        # behaviour). When set, pages/REST/WS require a signed session cookie
+        # (issued after the token is entered on /login) or a Bearer token. The
+        # cookie-signing key is derived from AUTH_TOKEN, so rotating the token
+        # invalidates every existing session.
+        auth_token=os.getenv("AUTH_TOKEN", "").strip(),
+        auth_session_ttl=_bounded_int_env(
+            "AUTH_SESSION_TTL", 7 * 24 * 3600, 60, 30 * 24 * 3600
+        ),
         static_dir=ROOT_DIR / "static",
     )

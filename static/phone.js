@@ -160,6 +160,15 @@ function socketUrl(path) {
   return `${protocol}//${window.location.host}${path}`;
 }
 
+// When access control is on and the session cookie lapses, the server answers
+// fetches with 401 and closes sockets with 1008; bounce back to the login page.
+function redirectToLogin() {
+  if (demoMode) {
+    return;
+  }
+  window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+}
+
 function setChip(element, text, tone) {
   element.textContent = text;
   element.classList.remove("good", "warn", "bad");
@@ -1529,11 +1538,16 @@ function connectSocket() {
     }
   });
 
-  ws.addEventListener("close", () => {
+  ws.addEventListener("close", (event) => {
     if (state.ws !== ws) {
       return;
     }
     state.ws = null;
+    // 1008 = server rejected an unauthenticated WS; go re-authenticate.
+    if (event.code === 1008) {
+      redirectToLogin();
+      return;
+    }
     if (hasFrameSource() && detectionTransportActive()) {
       setChip(socketStatus, "socket offline", "bad");
       state.reconnectTimer = setTimeout(connectSocket, 1200);
@@ -1613,6 +1627,10 @@ async function pollServerStatus() {
   }
   try {
     const response = await fetch("/api/status", { cache: "no-store" });
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
     if (response.ok) {
       const status = await response.json();
       applyDetectorStatus(status.detector);

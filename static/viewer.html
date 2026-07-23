@@ -6,7 +6,7 @@
     <title>YOLO Elf Viewer</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="/static/app.css?v=ui-4" />
+    <link rel="stylesheet" href="/static/app.css?v=ui-5" />
   </head>
   <body>
     <main class="viewer-shell">
@@ -116,6 +116,19 @@
             <div id="uploadMetric" class="metric-value">-</div>
           </div>
         </div>
+        <div class="panel-control view-filter">
+          <div class="view-filter-head">
+            <span class="panel-control-label">顯示過濾</span>
+            <button id="saveFrameButton" type="button" class="compact-button">存圖</button>
+          </div>
+          <div id="classFilterList" class="filter-chips"></div>
+          <label class="filter-conf">
+            <span class="panel-control-label">最低信心</span>
+            <input id="viewerMinConf" type="range" min="0" max="0.95" step="0.05" value="0" />
+            <output id="viewerMinConfValue" class="filter-conf-value">0%</output>
+          </label>
+          <p id="saveFrameHint" class="settings-hint" hidden></p>
+        </div>
         <div class="panel-control zone-editor">
           <div class="zone-editor-head">
             <span class="panel-control-label">ROI 區域</span>
@@ -134,6 +147,6 @@
         <div id="errorLine" class="error-line" hidden></div>
       </aside>
     </main>
-    <script type="module" src="/static/viewer.js?v=alerts-1"></script>
+    <script type="module" src="/static/viewer.js?v=viewfilter-1"></script>
   </body>
 </html>

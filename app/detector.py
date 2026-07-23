@@ -5,6 +5,7 @@ import threading
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from app.config import DETECT_MODES, Settings
@@ -98,6 +99,10 @@ class YoloDetector:
         self._classifier_lock = threading.Lock()
         self._classifier_error: str | None = None
         self._models: dict[str, Any] = {}
+        # The artifact actually loaded per mode (a `.pt`, or an auto-exported
+        # `.engine`/`.onnx`) — may differ from the configured model name.
+        self._loaded_sources: dict[str, str] = {}
+        self._export_error: str | None = None
         # Guards model loading so a background preload (triggered by a mode
         # switch) and the detection worker never load the same weights twice.
         self._load_lock = threading.Lock()
@@ -292,6 +297,9 @@ class YoloDetector:
             "configured_classes": list(self._classes),
             "open_vocabulary": self._open_vocab_applied.get(self._mode, False),
             "loaded": self.loaded,
+            "export_format": self.settings.yolo_export,
+            "loaded_source": self._loaded_sources.get(self._mode),
+            "last_export_error": self._export_error,
             "device": self._device,
             "resolved_device": resolved_device,
             "requested_device": self.settings.yolo_device,
@@ -432,8 +440,9 @@ class YoloDetector:
                 self._device_resolved = True
 
             model_name = self._model_name_for_mode(mode)
+            load_name = self._resolve_model_source(model_name)
             try:
-                model = YOLO(model_name)
+                model = YOLO(load_name)
                 applied = self._apply_open_vocabulary(model)
                 names = getattr(model, "names", {}) or {}
                 if isinstance(names, dict):
@@ -441,15 +450,64 @@ class YoloDetector:
                 else:
                     resolved_names = {index: str(value) for index, value in enumerate(names)}
             except Exception as exc:
-                self._load_error = f"Could not load YOLO model {model_name!r}: {exc}"
+                self._load_error = f"Could not load YOLO model {load_name!r}: {exc}"
                 raise DetectionError(self._load_error) from exc
 
             self._models[mode] = model
+            self._loaded_sources[mode] = load_name
             self._names_by_mode[mode] = resolved_names
             self._open_vocab_applied[mode] = applied
             self._names = resolved_names
             self._load_error = None
             return model
+
+    @staticmethod
+    def _export_target(model_name: str, export_format: str) -> Path | None:
+        """Pure: the artifact path an export would produce, or ``None`` to load as-is.
+
+        ``None`` means no export is needed — either the feature is off, or the
+        configured name is already an exported artifact (never re-export those, so
+        pointing ``YOLO_MODEL`` straight at a hand-built ``.engine`` works too).
+        """
+        if export_format not in {"engine", "onnx"}:
+            return None
+        if not model_name.lower().endswith(".pt"):
+            return None
+        suffix = ".engine" if export_format == "engine" else ".onnx"
+        return Path(model_name).with_suffix(suffix)
+
+    def _resolve_model_source(self, model_name: str) -> str:
+        """Resolve the artifact to load, auto-exporting a ``.pt`` when configured.
+
+        A cached export on disk is reused; otherwise the ``.pt`` is exported once.
+        Export needs the real toolchain (TensorRT engines require a GPU and bind to
+        the device/version), so it is exercised at load time, not in CI — the pure
+        path decision in :meth:`_export_target` is what the unit tests cover. A
+        failed export is recorded and falls back to the original ``.pt`` so
+        detection keeps working (unaccelerated) instead of going dark.
+        """
+        target = self._export_target(model_name, self.settings.yolo_export)
+        if target is None:
+            return model_name
+        if target.exists():
+            self._export_error = None
+            return str(target)
+        try:
+            from ultralytics import YOLO
+
+            exported = YOLO(model_name).export(
+                format=self.settings.yolo_export,
+                half=self._half_enabled,
+                imgsz=self._img_size,
+                device=self._device,
+            )
+            self._export_error = None
+            return str(exported)
+        except Exception as exc:  # noqa: BLE001 - surfaced via status; falls back to .pt
+            self._export_error = (
+                f"Export of {model_name!r} to {self.settings.yolo_export} failed: {exc}"
+            )
+            return model_name
 
     def _apply_open_vocabulary(self, model: Any) -> bool:
         """Set custom prompt classes on open-vocabulary models (YOLO-World/YOLOE).

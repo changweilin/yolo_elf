@@ -23,6 +23,30 @@ $env:YOLO_DEVICE = "0"
 .\scripts\bench.ps1 -Frames 20 -Warmup 3 -Device cpu -ImgSize 1280 -Quality 0.9
 ```
 
+## 推論加速（ONNX / TensorRT）
+
+在 GPU 上，把 `.pt` 換成預先 export 的 **TensorRT `.engine`** 通常能明顯降延遲（尤其 accurate preset）；**ONNX `.onnx`** 則在 CPU 或跨硬體時較通用。Ultralytics 的 `YOLO()` 本來就能直接載入這兩種格式，所以有兩條路：
+
+**路線 A — 自己指定產物（推薦，最可控）**：先離線 export，再把 `YOLO_MODEL` 指向產物。
+
+```powershell
+# 在「將來要跑伺服器」的那台機器上 export（engine 綁定該 GPU + 驅動/TensorRT 版本）
+python scripts\export_engine.py yolov8s.pt --format engine --half --imgsz 1280
+$env:YOLO_MODEL = "yolov8s.engine"
+.\scripts\run.ps1
+```
+
+**路線 B — 讓伺服器自動 export**：設 `YOLO_EXPORT`，首次載入時把 `.pt` export 成指定格式並改載入產物。
+
+```powershell
+$env:YOLO_EXPORT = "onnx"   # 或 "engine"
+```
+
+- 產物會**快取**在 `.pt` 同目錄，之後啟動直接載入、不重複 export。
+- Export **失敗會自動退回原 `.pt`**（不加速但不中斷），錯誤顯示在 `/api/status` 的 `detector.last_export_error`；實際載入了哪個檔看 `detector.loaded_source`。
+- `.engine` **無法在無 GPU 的機器 export**，且綁定裝置 + TensorRT/CUDA 版本，換卡或升級驅動要重新 export（刪掉舊 `.engine` 讓它重建，或重跑上面的腳本）。
+- FP16（`--half` / `YOLO_HALF=1`）沿用既有半精度設定，僅 CUDA 生效。
+
 ## 快速 / 精準模式切換
 
 不必重啟即可在兩個預設之間切換：在 Viewer 右側面板按 **快速 / 精準**，或呼叫
@@ -80,6 +104,16 @@ $env:EVENT_EXPIRY_SEC = "10"
 $env:ZONES = '[{"name":"門口","points":[[0.1,0.2],[0.4,0.2],[0.4,0.9],[0.1,0.9]],"anchor":"bottom"}]'
 ```
 
+## 檢視端過濾與存圖（只在 Viewer 端，不動偵測）
+
+Viewer 右側面板「顯示過濾」提供純前端的檢視工具，只影響這一個瀏覽器分頁的畫面，**不會改變後端偵測、也不影響其他檢視端或歷史紀錄**：
+
+- **類別過濾**：面板會列出串流中出現過的類別 chip，點一下切換顯示／隱藏（隱藏的 chip 會變灰加刪除線）。新出現的類別預設顯示，你的切換會跨影格保留。
+- **最低信心滑桿**：把低於門檻的框先藏起來，快速壓掉雜訊，範圍 0–95%。這是檢視端的視覺過濾，和後端的 `CONF_THRESH`（真正決定要不要送框）不同層。
+- **存圖**：按「存圖」把當前含框畫面存成 PNG。輸出用畫面的原始解析度（非拉伸的舞台尺寸），且只畫出目前沒被過濾掉的框與區域，檔名為 `yolo-elf-frame-<frame_id>.png`。
+
+> 這些過濾是顯示層；`Boxes` 指標仍顯示偵測器實際找到的框數，方便對照被藏起來的數量。
+
 ## 規則告警（偵測到就通知）
 
 當偵測命中設定的規則時觸發告警：即時推送到 Viewer（右上 `alerts` 狀態燈會亮、若已授權會跳瀏覽器通知），
@@ -105,6 +139,25 @@ $env:ALERT_WEBHOOK_TOKEN = "secret"
 不必重啟也能改規則：`POST /api/alerts`，body 為 `{"rules":[...]}`（或直接傳陣列）；
 `GET /api/alerts`、`/api/status` 的 `alerts` 欄位可看目前規則、觸發次數與最近事件。
 webhook 端點基於安全（SSRF 防護）**只能**用環境變數設定，不能透過執行階段 API 變更。
+
+## 用 Prometheus / Grafana 監控
+
+`GET /metrics` 把 `/api/status` 裡既有的指標以 Prometheus 文字格式輸出，不需額外套件，也不需要有錄影端在線就能抓（沒有串流時多數值為 0）。
+
+- **counter**（單調遞增，名稱以 `_total` 結尾）：`yolo_elf_frames_processed_total`、`yolo_elf_frames_dropped_total`、`yolo_elf_alerts_fired_total`、`yolo_elf_sightings_written_total`、遠端上傳的 `yolo_elf_remote_records_uploaded_total`…
+- **gauge**（瞬時值）：`yolo_elf_process_fps`、`yolo_elf_inference_ms`、`yolo_elf_avg_total_latency_ms`、`yolo_elf_queue_depth`、`yolo_elf_viewers`、`yolo_elf_active_sightings`、`yolo_elf_alert_rules`、`yolo_elf_zones`…
+- **info**：`yolo_elf_detector_info{mode,model,device}` 值恆為 1，用 label 帶出目前 preset。為避免 label 基數爆炸，`track_id` 這類高基數維度**不會**當 label。
+
+抓取設定（`prometheus.yml`）：
+
+```yaml
+scrape_configs:
+  - job_name: yolo-elf
+    static_configs:
+      - targets: ["127.0.0.1:8766"]
+```
+
+要關掉端點（例如公開部署時不想外露指標）：設 `METRICS_ENABLED=0`，`/metrics` 會回 404。端點本身不含驗證，遠端暴露時請靠反向代理或防火牆限制來源（存取控制見 roadmap #7）。
 
 ## 換用更多類別 / 專用模型
 
@@ -184,6 +237,24 @@ $env:YOLO_DEVICE = "0"
 
 若你需要更快但可以接受漏檢，可把 `IMG_SIZE` 改回 `640`、`JPEG_QUALITY`
 改回 `0.65`、模型換回 `yolov8n.pt`。
+
+## 存取控制（遠端使用前先開）
+
+預設**沒有任何驗證**：只要能連到這台伺服器（例如同一個 tailnet），任何人都能觀看、搶錄影端、或讀 `/metrics`。要遠端使用前，設一個共享權杖：
+
+```powershell
+# 自己產一個夠長的隨機權杖（別用範例值），設進環境變數後再啟動伺服器
+$env:AUTH_TOKEN = "換成你自己的長隨機字串"
+```
+
+啟用後：
+
+- **瀏覽器**：第一次進任何頁面會被導到 `/login`，輸入權杖 → 伺服器發一個 HttpOnly、簽章、預設 7 天（`AUTH_SESSION_TTL`）的 session cookie。之後頁面、`/api/*`、`/ws/*` 全靠這個 cookie；權杖不會出現在網址或 access log。cookie 過期時前端會自動導回 `/login`。
+- **程式端 / 抓取器**：改用 `Authorization: Bearer <AUTH_TOKEN>`（Prometheus 也可這樣抓 `/metrics`）。
+- **豁免**：`/health`（存活探測）與 `/login` 及其靜態資源永遠可存取；靜態 demo（GitHub Pages）無後端，本來就沒有驗證。
+- **換權杖**＝踢掉所有人：cookie 簽章金鑰由 `AUTH_TOKEN` 派生，改權杖會讓所有既有 session 立刻失效。
+
+安全備註：權杖請自己設定，別寫進版本控制或貼進聊天；伺服器不會把它寫進 log。此為單一共享權杖，不是逐使用者帳號；若要多帳號或稽核，需接反向代理的 SSO。
 
 ## 透過 Tailscale 時的取捨
 

@@ -13,6 +13,7 @@ SETTINGS_ENV = [
     "YOLO_HALF",
     "YOLO_TRACK",
     "YOLO_TRACKER",
+    "YOLO_EXPORT",
     "YOLO_WARMUP",
     "YOLO_WARMUP_RUNS",
     "CONF_THRESH",
@@ -56,6 +57,7 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
     assert settings.yolo_half is True
     assert settings.yolo_track is True
     assert settings.yolo_tracker == "bytetrack.yaml"
+    assert settings.yolo_export == ""
     assert settings.conf_thresh == 0.2
     assert settings.img_size == 1280
     assert settings.classifier_model == ""
@@ -132,6 +134,14 @@ def test_yolo_classes_parses_comma_separated_prompts(monkeypatch):
     assert settings.yolo_classes == ("person", "backpack", "fire extinguisher")
 
 
+@pytest.mark.parametrize("value", ["engine", "onnx", "ENGINE"])
+def test_yolo_export_accepts_known_formats(monkeypatch, value):
+    clear_settings_env(monkeypatch)
+    monkeypatch.setenv("YOLO_EXPORT", value)
+
+    assert get_settings().yolo_export == value.lower()
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     [
@@ -139,6 +149,7 @@ def test_yolo_classes_parses_comma_separated_prompts(monkeypatch):
         ("DETECT_MODE", "ultra"),
         ("YOLO_HALF", "maybe"),
         ("YOLO_TRACK", "maybe"),
+        ("YOLO_EXPORT", "trt"),
         ("YOLO_WARMUP", "warm"),
         ("YOLO_WARMUP_RUNS", "0"),
         ("CONF_THRESH", "1.5"),

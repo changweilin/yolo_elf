@@ -5,6 +5,7 @@ import pytest
 
 pytest.importorskip("fastapi")
 
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
@@ -32,6 +33,9 @@ REMOTE_ENV = [
     "EVENT_LOG_ENABLED",
     "EVENT_DB_PATH",
     "EVENT_EXPIRY_SEC",
+    "METRICS_ENABLED",
+    "AUTH_TOKEN",
+    "AUTH_SESSION_TTL",
 ]
 
 
@@ -239,6 +243,91 @@ def test_status_includes_stream_metrics():
     assert status["zones"]["zones"] == []
     assert status["events"]["enabled"] is False
     assert status["events"]["active_sightings"] == 0
+
+
+def test_metrics_endpoint_exposes_prometheus():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "version=0.0.4" in response.headers["content-type"]
+    body = response.text
+    assert "# TYPE yolo_elf_frames_processed_total counter" in body
+    assert "yolo_elf_viewers " in body
+    assert "yolo_elf_detector_info{" in body
+
+
+def test_metrics_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("METRICS_ENABLED", "0")
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.get("/metrics").status_code == 404
+
+
+def test_auth_disabled_by_default():
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.get("/api/status").status_code == 200
+        assert client.get("/viewer").status_code == 200
+        # login page is always served (harmless when auth is off)
+        assert client.get("/login").status_code == 200
+
+
+def test_auth_blocks_unauthenticated_requests(monkeypatch):
+    monkeypatch.setenv("AUTH_TOKEN", "secret")
+    app = create_app()
+    with TestClient(app) as client:
+        # API clients get a 401 they can act on
+        assert client.get("/api/status").status_code == 401
+        assert client.get("/metrics").status_code == 401
+        # exempt paths stay reachable so the login flow can bootstrap
+        assert client.get("/health").status_code == 200
+        assert client.get("/login").status_code == 200
+        assert client.get("/static/app.css").status_code == 200
+        # a browser navigation is redirected to the login page
+        page = client.get(
+            "/viewer", headers={"accept": "text/html"}, follow_redirects=False
+        )
+        assert page.status_code in {307, 308}
+        assert page.headers["location"].startswith("/login")
+
+
+def test_auth_bearer_token_is_accepted(monkeypatch):
+    monkeypatch.setenv("AUTH_TOKEN", "secret")
+    app = create_app()
+    with TestClient(app) as client:
+        headers = {"authorization": "Bearer secret"}
+        assert client.get("/api/status", headers=headers).status_code == 200
+        assert client.get("/metrics", headers=headers).status_code == 200
+
+
+def test_auth_login_sets_cookie_and_unlocks(monkeypatch):
+    monkeypatch.setenv("AUTH_TOKEN", "secret")
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.post("/api/login", json={"token": "nope"}).status_code == 401
+        assert client.get("/api/status").status_code == 401
+
+        assert client.post("/api/login", json={"token": "secret"}).status_code == 200
+        # the session cookie now rides along automatically
+        assert client.get("/api/status").status_code == 200
+
+        client.post("/api/logout")
+        assert client.get("/api/status").status_code == 401
+
+
+def test_auth_gates_websocket(monkeypatch):
+    monkeypatch.setenv("AUTH_TOKEN", "secret")
+    app = create_app()
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/viewer"):
+                pass
+        with client.websocket_connect("/ws/viewer?token=secret") as ws:
+            message = ws.receive_json()
+            assert message["type"] == "status"
 
 
 def test_alerts_default_to_disabled():
