@@ -30,7 +30,8 @@
 - **ROI 區域 / Region-of-interest zones** — 在 Viewer 直接框選多邊形區域，偵測框會標記所屬區域並即時顯示佔用數；告警規則可限定「只在某區域內」觸發。座標正規化（0–1），跟著畫面自動縮放，可經 `POST /api/zones` 即時增修。
 - **規則告警 / Rule-based alerts** — 依規則（類別、數量門檻、信心、區域）在偵測命中時觸發，帶冷卻時間去抖動；即時推送到 Viewer（含選用的瀏覽器通知）並可送出 webhook 串接外部系統。規則可經 `POST /api/alerts` 即時增修。
 - **第二階段分類器 / Second-stage classifier** — 選用的圖鑑模式：裁切每個偵測框並分類，為物件標註物種 / 細分類別。
-- **多檢視端廣播 / Unlimited viewers** — 一次只有一個錄影端，但檢視端數量不限，全部接收相同畫面。
+- **多相機 / Multi-camera** — 以 `CAMERAS` 定義允許清單（如 `front:前門,back:後院`），每路各自擁有畫面佇列、追蹤器狀態、ROI 區域、告警冷卻與歷史紀錄；單一 GPU worker 以公平佇列輪流處理各路，Viewer 以格狀同時監看、點一格放大。留空＝單相機，行為與過去完全相同。
+- **多檢視端廣播 / Unlimited viewers** — 每路相機一次只有一個錄影端，但檢視端數量不限；檢視端可看全部或只訂閱其中一路（`/ws/viewer?camera_id=`）。
 - **檢視端過濾與存圖 / Viewer filters & snapshot** — Viewer 可切換顯示哪些類別、拉一條「最低信心」滑桿（純前端過濾，不動後端偵測），並一鍵「存圖」把當前含框畫面以原始解析度輸出成 PNG。純前端，無需設定或 API。
 - **錄影與中繼資料 / Recording & metadata** — 透過瀏覽器 `MediaRecorder` 錄影，可存本機、遠端或兩者，並附帶逐格偵測 `.detections.json` sidecar。
 - **存取控制 / Access control** — 選用的共享權杖驗證：設定 `AUTH_TOKEN` 後，頁面 / REST / WebSocket 都需驗證。瀏覽器在 `/login` 輸入權杖換取 HttpOnly 簽章 cookie（連 WS 一起認證，權杖不進網址或 log）；程式端可用 `Authorization: Bearer`。留空＝不啟用（維持現狀）。
@@ -114,8 +115,22 @@ Each page header has a **Recorder / Viewer / Settings** switch so any device can
 | 設定 / Settings | `http://127.0.0.1:8766/settings` | 執行階段調整模型 / 類別 / 門檻 / live detector config |
 | 歷史 / History | `http://127.0.0.1:8766/history` | 偵測出現紀錄的時間軸與查詢 / sighting timeline & search |
 
-> 一次只有一個錄影端：在新裝置上取得錄影端角色，會把相機交接過去；檢視端數量不限。
-> Only one recorder streams at a time — taking the recorder role hands the camera over from the previous device. Viewers are unlimited.
+> 每路相機一次只有一個錄影端：在新裝置上取得同一路的錄影端角色，會把相機交接過去；檢視端數量不限。
+> Only one recorder streams per camera — taking that camera's recorder role hands it over from the previous device. Viewers are unlimited.
+
+**多相機 / Multiple cameras**：設定 `CAMERAS` 後，每台裝置以 `?camera_id=` 指定自己是哪一路，Viewer 則自動變成格狀版面（點一格放大、再點回到全景）。
+
+```powershell
+$env:CAMERAS = "front:前門,back:後院"
+.\scripts\run.ps1
+```
+
+| 用途 / Purpose | 網址 / URL |
+| --- | --- |
+| 前門的錄影端 / front-door recorder | `http://127.0.0.1:8766/recorder?camera_id=front` |
+| 後院的錄影端 / back-yard recorder | `http://127.0.0.1:8766/recorder?camera_id=back` |
+| 全部相機（格狀）/ all cameras | `http://127.0.0.1:8766/viewer` |
+| 只看一路 / a single camera | `http://127.0.0.1:8766/viewer?camera_id=back` |
 
 ### 啟動時帶入參數 / Bake values in at launch
 
@@ -171,21 +186,22 @@ The test script runs the Python tests, checks the benchmark script's syntax, and
 The server runs a single detection pipeline shared by every connected client:
 
 ```
-Recorder (browser)                Server (FastAPI)                  Viewers (browser)
- ┌────────────┐   JPEG / WS   ┌───────────────────────────┐   JPEG + boxes / WS  ┌──────────┐
- │  camera →  │ ────────────▶ │  stream hub (single-slot) │ ───────────────────▶ │ overlay  │
- │  encode    │  /ws/camera   │        ↓ newest frame     │     /ws/viewer       │ canvas   │
- └────────────┘               │  detection worker (YOLO)  │                      └──────────┘
-        ▲  boxes only         │   + optional classifier   │
-        └─────────────────────│        ↓ result           │── optional ──▶ remote storage
-                              └───────────────────────────┘
+Recorders (browser)                 Server (FastAPI)                  Viewers (browser)
+ ┌────────────┐   JPEG / WS   ┌────────────────────────────────┐  JPEG + boxes / WS  ┌──────────┐
+ │ camera A → │ ────────────▶ │ channel A (single-slot) ┐      │ ──────────────────▶ │ pane A   │
+ │ camera B → │  /ws/camera   │ channel B (single-slot) ┴─▶ ready│    /ws/viewer     │ pane B   │
+ └────────────┘  ?camera_id=  │        ↓ newest frame per camera│                    └──────────┘
+        ▲  boxes only         │  detection worker (YOLO, 1×GPU) │
+        └─────────────────────│   + optional classifier         │── optional ──▶ remote storage
+                              └────────────────────────────────┘
 ```
 
-- **擷取 / Capture** — 錄影端開啟相機、在瀏覽器中把畫面編碼成 JPEG，並透過 `/ws/camera` WebSocket 推送。
-- **串流中樞 / Stream hub**（`app/stream_state.py`）— 追蹤唯一的活躍錄影端、檢視端集合，以及單槽畫面佇列。佇列只保留最新一張：若新畫面在舊畫面仍等待時抵達，舊畫面會被丟棄，使偵測永不落後即時輸入。
-- **偵測工作者 / Detection worker**（`app/main.py`）— 背景任務取出最新畫面，以 `asyncio.to_thread` 在事件迴圈之外執行 YOLO 推論，選擇性執行第二階段分類器，再發佈結果。
-- **扇出 / Fan-out** — 每筆結果回傳給錄影端（僅偵測框）與所有檢視端（JPEG 畫面 + 偵測框），並排入選用的遠端儲存上傳佇列。
-- **偵測器 / Detector**（`app/detector.py`）— 依 preset 載入並快取 YOLO 權重、解析 CUDA / CPU 裝置、套用開放詞彙提示，並執行選用的「裁切後分類」第二階段。
+- **擷取 / Capture** — 錄影端開啟相機、在瀏覽器中把畫面編碼成 JPEG，並透過 `/ws/camera?camera_id=<id>` WebSocket 推送。省略 `camera_id` 即為預設相機。
+- **串流登錄 / Stream registry**（`app/stream_state.py`）— 依 `CAMERAS` 為每路建立一個 `StreamChannel`：各自的錄影端、單槽畫面佇列與計數器。佇列只保留最新一張：若新畫面在舊畫面仍等待時抵達，舊畫面會被丟棄，使偵測永不落後即時輸入。檢視端可訂閱全部或單一相機。
+- **排程 / Scheduling** — 各路不去搶 GPU：提交端把「哪一路有新畫面」推進一個共用的就緒佇列，單一 worker 依序取用。這天生就是輪流（round-robin），且忙不過來時自然退化成較低的有效 FPS，而不是排隊爆掉。
+- **偵測工作者 / Detection worker**（`app/main.py`）— 背景任務取出某一路的最新畫面，以 `asyncio.to_thread` 在事件迴圈之外執行 YOLO 推論，選擇性執行第二階段分類器，再發佈結果。GPU 存取序列化於此單一 worker。
+- **扇出 / Fan-out** — 每筆結果回傳給該路錄影端（僅偵測框）與訂閱該路的檢視端（JPEG 畫面 + 偵測框），並排入選用的遠端儲存上傳佇列。
+- **偵測器 / Detector**（`app/detector.py`）— 依 preset 載入並快取 YOLO 權重、解析 CUDA / CPU 裝置、套用開放詞彙提示，並執行選用的「裁切後分類」第二階段。追蹤器狀態存在 model 物件內，因此第一路沿用主 model，其餘每路各持一份實例，`track_id` 不會跨路混淆（記憶體成本＝額外相機數 × 權重）。
 
 ---
 
@@ -196,6 +212,8 @@ Behaviour is driven by environment variables. The most common ones:
 
 | 變數 / Name | 預設 / Default | 說明 / Description |
 | --- | --- | --- |
+| `CAMERAS` | _(空 / empty)_ | 多相機允許清單，逗號分隔的 `id` 或 `id:顯示名`。範例：`front:前門,back:後院`。留空＝單一隱含的 `default` 相機（行為與過去完全相同）。錄影端只能宣告清單內的 id，避免任意 id 灌爆伺服器，也讓 Viewer 版面在相機離線時保持穩定。偵測參數（preset / 信心 / 類別）全域共用；ROI 區域、告警與歷史則各自獨立。 |
+| `MAX_CAMERAS` | `4` | `CAMERAS` 的數量上限（1–16）。超過即啟動失敗。先用 `scripts/bench_detector.py` 量測單卡吞吐再往上調。 |
 | `DETECT_MODE` | `fast` | 啟動時的偵測 preset：`fast`（用 `YOLO_MODEL`）或 `accurate`（用 `YOLO_MODEL_ACCURATE`）。可在執行階段由 Viewer 的「快速 / 精準」切換或 `POST /api/detector/mode` 變更。 |
 | `YOLO_MODEL` | `yolov8s.pt` | **快速** preset 使用的模型，偏向速度。 |
 | `YOLO_MODEL_ACCURATE` | `yolov8x.pt` | **精準** preset 使用的模型；越大越準但越慢，首次使用自動下載。可試 `yolo11x.pt`（最新最高精度）或 `yolov8x-oiv7.pt`（Open Images V7，600 類）。 |
@@ -227,16 +245,16 @@ Behaviour is driven by environment variables. The most common ones:
 | `REMOTE_STORAGE_QUEUE_SIZE` | `100` | 背景遠端上傳佇列大小。 |
 | `REMOTE_STORAGE_TIMEOUT` | `5.0` | 遠端上傳逾時（秒）。 |
 | `REMOTE_STORAGE_RETRIES` | `2` | 每次遠端上傳的重試次數。 |
-| `ALERT_RULES` | _(空 / empty)_ | 規則告警設定，JSON 陣列。每條規則：`name`（必填）、`classes`（逗號字串或陣列，留空＝任意類別）、`min_count`（預設 1）、`min_confidence`（0–1，預設 0）、`cooldown_sec`（預設 `ALERT_COOLDOWN_SEC`）。留空＝停用。範例：`[{"name":"有人","classes":["person"],"min_count":1,"cooldown_sec":30}]`。也可經 `POST /api/alerts` 即時修改。 |
-| `ALERT_COOLDOWN_SEC` | `15` | 未指定 `cooldown_sec` 的規則預設冷卻秒數，避免每格重複觸發。 |
+| `ALERT_RULES` | _(空 / empty)_ | 規則告警設定，JSON 陣列。每條規則：`name`（必填）、`classes`（逗號字串或陣列，留空＝任意類別）、`min_count`（預設 1）、`min_confidence`（0–1，預設 0）、`cooldown_sec`（預設 `ALERT_COOLDOWN_SEC`）、`zone`（選填）、`camera_id`（選填，留空＝套用所有相機）。留空＝停用。範例：`[{"name":"有人","classes":["person"],"min_count":1,"cooldown_sec":30}]`。也可經 `POST /api/alerts` 即時修改。 |
+| `ALERT_COOLDOWN_SEC` | `15` | 未指定 `cooldown_sec` 的規則預設冷卻秒數，避免每格重複觸發。冷卻以「相機 × 規則」計算，前門觸發不會壓住後院的同一條規則。 |
 | `ALERT_WEBHOOK_URL` | _(空 / empty)_ | 選用：告警觸發時 POST 的 webhook 端點。留空則僅推送到 Viewer。為防 SSRF，此端點僅能由環境變數設定，不可經執行階段 API 變更。 |
 | `ALERT_WEBHOOK_TOKEN` | _(空 / empty)_ | webhook 的選用 bearer token。 |
 | `ALERT_WEBHOOK_TIMEOUT` | `5.0` | webhook 逾時（秒）。 |
 | `ALERT_WEBHOOK_RETRIES` | `2` | 每次 webhook 發送的重試次數。 |
-| `ZONES` | _(空 / empty)_ | ROI 多邊形，JSON 陣列。每個區域：`name`（必填）、`points`（≥3 個 `[x,y]`，正規化 0–1）、`anchor`（`center` 中心點或 `bottom` 底邊中點，預設 `center`）。留空＝停用。範例：`[{"name":"門口","points":[[0.1,0.2],[0.4,0.2],[0.4,0.9],[0.1,0.9]]}]`。也可在 Viewer 框選或經 `POST /api/zones` 即時修改。 |
+| `ZONES` | _(空 / empty)_ | ROI 多邊形，JSON 陣列。每個區域：`name`（必填）、`points`（≥3 個 `[x,y]`，正規化 0–1）、`anchor`（`center` 中心點或 `bottom` 底邊中點，預設 `center`）、`camera_id`（選填，預設為第一台相機）。留空＝停用。範例：`[{"name":"門口","points":[[0.1,0.2],[0.4,0.2],[0.4,0.9],[0.1,0.9]]}]`。多相機也可直接給物件形式：`{"front":[...],"back":[...]}`。也可在 Viewer 框選或經 `POST /api/zones` 即時修改。 |
 | `EVENT_LOG_ENABLED` | `1` | 啟用偵測歷史：把追蹤到的物件聚合成 per-sighting 紀錄寫入 SQLite，供 `/history` 查詢。設 `0` 關閉。需搭配 `YOLO_TRACK`。 |
 | `EVENT_DB_PATH` | `events.db` | 偵測歷史 SQLite 檔路徑（相對路徑以專案根為基準）。 |
-| `EVENT_EXPIRY_SEC` | `5.0` | 一個 `track_id` 連續未再出現超過此秒數即視為離開，該筆 sighting 定案並寫入資料庫。 |
+| `EVENT_EXPIRY_SEC` | `5.0` | 一個 `track_id` 連續未再出現超過此秒數即視為離開，該筆 sighting 定案並寫入資料庫。多相機下 sighting 以 `(camera_id, track_id)` 為唯一鍵，兩路的 `#1` 不會被併成同一筆。 |
 | `METRICS_ENABLED` | `1` | 啟用 Prometheus `GET /metrics` 端點（純讀取，把既有指標以文字格式輸出）。設 `0` 則該端點回 404。 |
 | `AUTH_TOKEN` | _(空 / empty)_ | 存取權杖。留空＝完全不啟用驗證（維持現狀）。設定後，頁面 / `/api/*` / `/ws/*` 需帶有效 session cookie（於 `/login` 輸入權杖取得）或 `Authorization: Bearer <token>`。cookie 簽章金鑰由權杖派生，換權杖即令所有既有 session 失效。**（安全規範：驗證機制可實作，但不會代使用者輸入/建立帳密——請自行設定此環境變數。）** |
 | `AUTH_SESSION_TTL` | `604800` | session cookie 有效秒數（預設 7 天）。範圍 60 – 2592000（30 天）。 |
@@ -270,15 +288,16 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `POST /api/login` | 以權杖換取 session cookie。Body：`{"token": "..."}`。驗證失敗回 401。 |
 | `POST /api/logout` | 清除 session cookie / clear the session cookie. |
 | `GET /metrics` | Prometheus 文字格式指標（可接 Grafana）。`METRICS_ENABLED=0` 時回 404。 |
-| `GET /api/status` | 完整執行階段快照：串流統計、偵測器狀態、錄影、遠端儲存。 |
+| `GET /api/status` | 完整執行階段快照：串流統計、偵測器狀態、錄影、遠端儲存。頂層數字是全機彙總，`cameras` 為各路明細；`camera_id` 參數選擇 `zones` 要回哪一路。 |
+| `GET /api/cameras` | 相機允許清單、預設相機與各路串流狀態 / configured cameras and their stream state. |
 | `POST /api/detector/mode` | 切換 preset。Body：`{"mode": "fast"}` 或 `{"mode": "accurate"}`。 |
 | `GET /api/detector/config` | 目前偵測器設定 / current detector configuration. |
 | `POST /api/detector/config` | 執行階段更新設定（部分更新，只變更傳入的鍵）/ partial runtime update. |
 | `GET /api/alerts` | 目前告警規則與觸發狀態 / current alert rules and firing state. |
 | `POST /api/alerts` | 執行階段替換告警規則。Body：`{"rules": [...]}` 或直接傳陣列 / replace alert rules at runtime. |
-| `GET /api/zones` | 目前 ROI 區域 / current ROI zones. |
-| `POST /api/zones` | 執行階段替換 ROI 區域。Body：`{"zones": [...]}` 或直接傳陣列 / replace ROI zones at runtime. |
-| `GET /api/events` | 查詢偵測出現紀錄。Query：`limit`、`since`、`until`（epoch 秒）、`label`、`zone` / query sighting history. |
+| `GET /api/zones` | 目前 ROI 區域。Query：`camera_id`（省略＝預設相機）；回應含全部相機的 `cameras` 對照。 |
+| `POST /api/zones` | 執行階段替換某一路的 ROI 區域。Body：`{"camera_id": "front", "zones": [...]}`；省略 `camera_id` 即預設相機，也可直接傳陣列。只影響指定的那一路。 |
+| `GET /api/events` | 查詢偵測出現紀錄。Query：`limit`、`since`、`until`（epoch 秒）、`label`、`zone`、`camera_id` / query sighting history. |
 | `POST /api/recordings` | 上傳錄影，依 `X-Yolo-Elf-Storage-Mode` 標頭路由儲存 / upload a recording. |
 | `POST /api/recordings/{id}/metadata` | 為錄影附加逐格偵測 sidecar / attach detection sidecar. |
 | `GET /api/recordings/{id}` | 下載已儲存的錄影 / download a recording. |
@@ -288,8 +307,8 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 
 | 路由 / Route | 流向 / Flow | 內容 / Payload |
 | --- | --- | --- |
-| `/ws/camera` | recorder → server | 二進位 JPEG 畫面；文字 `client_state` 訊息回報儲存模式與錄影狀態。伺服器連線時回覆 `config` 訊息。 |
-| `/ws/viewer` | server → viewer | 每格 JSON 中繼資料後接二進位 JPEG，並可依請求附上 `status` 快照；規則告警觸發時另推送 `alert` 訊息。 |
+| `/ws/camera?camera_id=` | recorder → server | 二進位 JPEG 畫面；文字 `client_state` 訊息回報儲存模式與錄影狀態。伺服器連線時回覆 `config` 訊息（含 `camera_id` 與相機清單）。`camera_id` 省略＝預設相機；不在 `CAMERAS` 清單內則回一則 `fatal` 錯誤並以 4404 關閉。 |
+| `/ws/viewer?camera_id=` | server → viewer | 每格 JSON 中繼資料（含 `camera_id`）後接二進位 JPEG，並可依請求附上 `status` 快照；規則告警觸發時另推送 `alert` 訊息。`camera_id` 省略＝訂閱全部相機。 |
 
 ---
 
@@ -299,7 +318,7 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | --- | --- |
 | `app/main.py` | FastAPI 應用、路由、WebSocket 處理器、偵測工作者。 |
 | `app/detector.py` | YOLO 載入、推論、框擷取、第二階段分類器。 |
-| `app/stream_state.py` | 串流中樞：錄影端 / 檢視端追蹤、畫面佇列、指標。 |
+| `app/stream_state.py` | 串流登錄：每路相機的錄影端 / 畫面佇列 / 指標，檢視端訂閱，與共用的就緒佇列排程。 |
 | `app/recordings.py` | 錄影上傳、中繼資料 sidecar、本機儲存。 |
 | `app/remote_storage.py` | 偵測中繼資料與錄影的背景上傳佇列。 |
 | `app/alerts.py` | 規則告警引擎：規則評估、冷卻去抖動、webhook 背景發送。 |

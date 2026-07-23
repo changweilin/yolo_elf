@@ -103,30 +103,76 @@ def parse_zones(raw: str) -> tuple[Zone, ...]:
     return build_zones(data)
 
 
+def build_camera_zones(data: Any, default_camera_id: str) -> dict[str, tuple[Zone, ...]]:
+    """Validate a decoded ``ZONES`` value into per-camera zone lists.
+
+    Two shapes are accepted: a bare array (all zones belong to the default
+    camera, unless an entry carries its own ``camera_id``), or an object mapping
+    ``camera_id`` to an array. The bare array is the pre-multi-camera format, so
+    an existing ``ZONES`` value keeps meaning exactly what it meant before.
+    """
+    if isinstance(data, dict):
+        return {
+            str(camera_id): build_zones(items) for camera_id, items in data.items()
+        }
+    if not isinstance(data, list):
+        raise ValueError("zones must be a JSON array of zone objects, or a camera map")
+
+    grouped: dict[str, list[Any]] = {}
+    for item in data:
+        camera_id = default_camera_id
+        if isinstance(item, dict) and item.get("camera_id"):
+            camera_id = str(item["camera_id"]).strip() or default_camera_id
+        grouped.setdefault(camera_id, []).append(item)
+    return {camera_id: build_zones(items) for camera_id, items in grouped.items()}
+
+
+def parse_camera_zones(raw: str, default_camera_id: str) -> dict[str, tuple[Zone, ...]]:
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"ZONES must be valid JSON: {exc}") from exc
+    return build_camera_zones(data, default_camera_id)
+
+
 class ZoneEngine:
     """Tags detection boxes with the ROI polygons they fall inside.
 
     Membership is tested in normalized frame coordinates so a zone follows the
-    scene regardless of capture resolution. Pure CPU work with no I/O — the
-    detection worker calls ``annotate`` inline; ``set_zones`` swaps the tuple
-    reference atomically, so no lock is needed on the single event loop.
+    scene regardless of capture resolution. Zones are per-camera: two recorders
+    point at different physical places, so a shared polygon list would be
+    meaningless. Pure CPU work with no I/O — the detection worker calls
+    ``annotate`` inline; ``set_zones`` swaps a tuple reference atomically, so no
+    lock is needed on the single event loop.
     """
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._zones = parse_zones(settings.zones_json)
+        self.default_camera_id = settings.default_camera_id
+        self._zones_by_camera = parse_camera_zones(
+            settings.zones_json, self.default_camera_id
+        )
 
     @property
     def enabled(self) -> bool:
-        return bool(self._zones)
+        return any(self._zones_by_camera.values())
 
-    def annotate(self, detection: dict[str, Any]) -> dict[str, Any]:
+    def zones_for(self, camera_id: str | None = None) -> tuple[Zone, ...]:
+        key = camera_id or self.default_camera_id
+        return self._zones_by_camera.get(key, ())
+
+    def annotate(
+        self, detection: dict[str, Any], camera_id: str | None = None
+    ) -> dict[str, Any]:
         """In place: add ``box['zones']`` and ``detection['zone_counts']``.
 
-        No-op (zero added fields) when no zones are configured or the frame
+        No-op (zero added fields) when the camera has no zones or the frame
         errored, so the feature has no cost when unused.
         """
-        zones = self._zones
+        zones = self.zones_for(camera_id)
         if not zones or detection.get("error"):
             return detection
 
@@ -146,11 +192,21 @@ class ZoneEngine:
         detection["zone_counts"] = counts
         return detection
 
-    def set_zones(self, data: Any) -> None:
-        self._zones = build_zones(data)
+    def set_zones(self, data: Any, camera_id: str | None = None) -> None:
+        """Replace one camera's zone list (fail loud on an invalid polygon)."""
+        key = camera_id or self.default_camera_id
+        self._zones_by_camera = {**self._zones_by_camera, key: build_zones(data)}
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, camera_id: str | None = None) -> dict[str, Any]:
+        # `zones` stays the flat single-camera view (the requested camera, or the
+        # default) so existing readers — /api/status, /metrics, viewer.js — keep
+        # working; `cameras` carries the full per-camera picture.
         return {
             "enabled": self.enabled,
-            "zones": [zone.public() for zone in self._zones],
+            "camera_id": camera_id or self.default_camera_id,
+            "zones": [zone.public() for zone in self.zones_for(camera_id)],
+            "cameras": {
+                key: [zone.public() for zone in zones]
+                for key, zones in self._zones_by_camera.items()
+            },
         }

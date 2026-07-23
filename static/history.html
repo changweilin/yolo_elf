@@ -6,7 +6,7 @@
     <title>YOLO Elf History</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="/static/app.css?v=history-1" />
+    <link rel="stylesheet" href="/static/app.css?v=history-2" />
   </head>
   <body class="settings-page">
     <main class="settings-shell">
@@ -71,6 +71,12 @@
               <button type="button" class="compact-button" data-range="86400">近 24 小時</button>
               <button type="button" class="compact-button" data-range="0">全部</button>
             </div>
+            <label class="history-field" for="cameraFilter" id="cameraFilterField" hidden>
+              <span>相機</span>
+              <select id="cameraFilter">
+                <option value="">全部相機</option>
+              </select>
+            </label>
             <label class="history-field" for="labelFilter">
               <span>類別</span>
               <input id="labelFilter" type="text" autocomplete="off" spellcheck="false" placeholder="全部（如 person）" />
@@ -91,6 +97,7 @@
               <thead>
                 <tr>
                   <th>首次出現</th>
+                  <th id="cameraColumnHead" hidden>相機</th>
                   <th>類別</th>
                   <th>#ID</th>
                   <th>區域</th>
@@ -106,6 +113,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/static/history.js"></script>
+    <script type="module" src="/static/history.js?v=multicam-1"></script>
   </body>
 </html>

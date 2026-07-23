@@ -70,6 +70,45 @@ $env:YOLO_EXPORT = "onnx"   # 或 "engine"
 - **關閉**：`YOLO_TRACK=0`（或 `run.ps1 -Track off`）退回逐格獨立偵測，`track_id` 為 `null`。
 - 追蹤狀態是每個模型各自維護：切換 快速／精準 模式時 id 不會延續。這是啟動時的設定，
   不透過設定頁即時切換（避免追蹤器狀態殘留造成誤判）。
+- **多相機**：追蹤器狀態存在 model 物件內，兩路共用一個實例會把 `track_id` 混在一起。因此第一台相機
+  沿用主 model，其餘每台各自持有一份 model 實例——記憶體成本是「額外相機數 × 權重」，`accurate`
+  preset（`yolov8x` 等）尤其吃重。`/api/status` 的 `detector.tracker_streams` 就是額外實例數。
+  `track_id` 明確**不跨相機共用**：前門的 `#3` 和後院的 `#3` 是兩個不相干的物件。
+
+## 多相機（輕量 NVR）
+
+留空 `CAMERAS` ＝單相機，一切與過去相同。要接多路就給一份允許清單：
+
+```powershell
+# id 或 id:顯示名，最多 MAX_CAMERAS 台（預設 4）
+$env:CAMERAS = "front:前門,back:後院"
+.\scripts\run.ps1
+```
+
+- **錄影端**：每台裝置用 `?camera_id=` 宣告自己是哪一路，例如 `/recorder?camera_id=front`。
+  不在清單內的 id 會被拒絕（狀態列顯示「camera id rejected」），避免任意 id 灌爆伺服器。
+- **檢視端**：`/viewer` 自動變成格狀版面（2 路→並排、3–4 路→九宮格 2×2，依此類推），
+  點一格放大、再點回全景；也可用 `/viewer?camera_id=back` 直接釘住單一路（只訂閱該路，省頻寬）。
+- **哪些設定是全域、哪些是每路**：
+  | 設定 | 範圍 |
+  | --- | --- |
+  | preset（快速／精準）、`CONF_THRESH`、`IMG_SIZE`、`YOLO_CLASSES`、分類器 | 全域共用 |
+  | ROI 區域、告警規則與冷卻、偵測歷史 | 每路獨立 |
+  | 錄影 / 遠端上傳 | 目前仍為單一路（第一版未做多相機錄影） |
+- **GPU 排程**：所有路共用**一個** worker（不是每路一條執行緒去搶 GPU）。提交端把「哪一路有新畫面」
+  推進一個共用就緒佇列，worker 依序取用——天生輪流，且每路各自的單槽佇列保證永遠處理最新影格、
+  丟掉舊的。忙不過來時會自然退化成較低的有效 FPS，而不是排隊爆掉。
+- **先量測再加相機**：N 路的總需求是各路 FPS 的總和。用 `scripts/bench_detector.py` 量單卡在你的
+  `IMG_SIZE`／preset 下每秒能吃幾張，再決定 `MAX_CAMERAS` 與各路的 `FRAME_FPS`。
+- **監看**：`/metrics` 除了原本的全機彙總，另有 `camera` 標籤的每路序列
+  （`yolo_elf_camera_frames_processed_total{camera="front"}`、`camera_inference_ms`…）。
+
+```powershell
+# 每路各自的 ROI 區域，用物件形式一次帶入
+$env:ZONES = '{"front":[{"name":"門口","points":[[0.1,0.2],[0.4,0.2],[0.4,0.9],[0.1,0.9]]}],"back":[{"name":"車道","points":[[0.5,0.4],[0.9,0.4],[0.9,0.95],[0.5,0.95]]}]}'
+# 只在後院觸發的規則
+$env:ALERT_RULES = '[{"name":"後院有人","classes":["person"],"camera_id":"back"}]'
+```
 
 ## 偵測歷史（回放誰在什麼時候出現）
 
@@ -78,6 +117,8 @@ $env:YOLO_EXPORT = "onnx"   # 或 "engine"
 到 `/history` 頁面即可依類別、區域、時間範圍查詢時間軸。
 
 - **需要追蹤**：紀錄以 `track_id` 聚合，所以要 `YOLO_TRACK=1`（預設開）；關掉追蹤就沒有 `track_id` 可聚合。
+- **多相機**：紀錄以 `(camera_id, track_id)` 為唯一鍵，兩路的 `#1` 不會被併成同一筆；`/history` 多一個相機下拉與欄位。
+  舊資料庫沒有 `camera_id` 欄，首次讀寫會自動 `ALTER TABLE` 補上，舊資料視為預設（第一台）相機。
 - **何時定案**：一個 `track_id` 連續未再出現超過 `EVENT_EXPIRY_SEC`（預設 5 秒）就視為離開，該筆紀錄定案並落地。
   停留時間短的場景可調小、想合併短暫遮擋可調大。
 - **關閉**：`EVENT_LOG_ENABLED=0`；資料庫檔已列入 `.gitignore`。
@@ -98,6 +139,9 @@ $env:EVENT_EXPIRY_SEC = "10"
 - **判定點**：`anchor` 決定用框的哪個點判斷是否在區域內——`center`（中心，預設，適合一般物件）或 `bottom`（底邊中點，適合人／車站在地面的位置）。
 - **搭配告警**：在告警規則加 `"zone":"門口"`，該規則就只計入落在該區域內的框（見下節）。
 - **即時修改**：Viewer 框選會 `POST /api/zones`；也可直接呼叫 API 或用 `ZONES` 環境變數開機帶入。
+- **多相機**：區域是每路各自一份（兩台相機拍的是不同地點，共用一份沒有意義）。在格狀版面要先點一格
+  放大，才知道要畫在哪一路——沒選之前「編輯」按鈕是停用的。`ZONES` 可用物件形式 `{"front":[…]}`
+  分路帶入，或在陣列項目上加 `"camera_id"`；不指定就屬於第一台相機（＝原本的單相機語意）。
 
 ```powershell
 # 開機就帶一個門口區域（正規化座標）
@@ -126,7 +170,9 @@ Viewer 右側面板「顯示過濾」提供純前端的檢視工具，只影響�
 - `min_count`：命中框數達到才觸發（預設 `1`）。
 - `min_confidence`：低於此信心的框不計入（預設 `0`）。
 - `cooldown_sec`：同一規則兩次觸發的最短間隔，避免每格狂噴（未填用 `ALERT_COOLDOWN_SEC`，預設 15 秒）。
+  冷卻以「相機 × 規則」計算：前門剛觸發不會把後院的同一條規則一起壓住。
 - `zone`（選用）：只計入落在指定 ROI 區域內的框（見上一節）；留空＝整個畫面。
+- `camera_id`（選用）：只在指定的那一路相機評估；留空＝所有相機都套用。
 
 ```powershell
 # 一有人就通知，最短間隔 30 秒
@@ -147,6 +193,7 @@ webhook 端點基於安全（SSRF 防護）**只能**用環境變數設定，不
 - **counter**（單調遞增，名稱以 `_total` 結尾）：`yolo_elf_frames_processed_total`、`yolo_elf_frames_dropped_total`、`yolo_elf_alerts_fired_total`、`yolo_elf_sightings_written_total`、遠端上傳的 `yolo_elf_remote_records_uploaded_total`…
 - **gauge**（瞬時值）：`yolo_elf_process_fps`、`yolo_elf_inference_ms`、`yolo_elf_avg_total_latency_ms`、`yolo_elf_queue_depth`、`yolo_elf_viewers`、`yolo_elf_active_sightings`、`yolo_elf_alert_rules`、`yolo_elf_zones`…
 - **info**：`yolo_elf_detector_info{mode,model,device}` 值恆為 1，用 label 帶出目前 preset。為避免 label 基數爆炸，`track_id` 這類高基數維度**不會**當 label。
+- **每路相機**：帶 `camera` label 的序列 `yolo_elf_camera_frames_received_total`、`camera_frames_processed_total`、`camera_frames_dropped_total`、`camera_process_fps`、`camera_inference_ms`、`camera_total_latency_ms`、`camera_connected`，加上總數 `yolo_elf_cameras`。基數受 `MAX_CAMERAS` 上限保護，所以 `camera` 當 label 是安全的。上面那些不帶 label 的序列仍是全機彙總。
 
 抓取設定（`prometheus.yml`）：
 

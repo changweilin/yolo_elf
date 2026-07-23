@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,13 @@ ULTRALYTICS_DIR.mkdir(exist_ok=True)
 # Detection presets the runtime can switch between. "fast" favours speed and
 # uses `yolo_model`; "accurate" swaps in the larger `yolo_model_accurate`.
 DETECT_MODES = ("fast", "accurate")
+
+# The implicit single-camera identity. With CAMERAS unset the registry holds
+# exactly one channel under this id, so every camera_id-aware call site keeps
+# behaving like the original single-stream server.
+DEFAULT_CAMERA_ID = "default"
+DEFAULT_CAMERA_NAME = "Camera"
+CAMERA_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 
 
 def _int_env(name: str, default: int) -> int:
@@ -82,6 +90,42 @@ def _list_env(name: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
+def parse_cameras(raw: str, max_cameras: int) -> tuple[tuple[str, str], ...]:
+    """Parse the ``CAMERAS`` allowlist into ``(camera_id, display_name)`` pairs.
+
+    Format is a comma-separated list of ``id`` or ``id:顯示名`` entries, e.g.
+    ``front:前門,back:後院``. An empty value yields the single implicit default
+    camera, which is what keeps the single-stream behaviour untouched. The
+    allowlist exists so a recorder cannot invent arbitrary ids (which would let
+    a stray client spawn unbounded channels) and so the viewer grid has a stable
+    layout even while a camera is offline.
+    """
+    entries = [item.strip() for item in (raw or "").split(",") if item.strip()]
+    if not entries:
+        return ((DEFAULT_CAMERA_ID, DEFAULT_CAMERA_NAME),)
+
+    if len(entries) > max_cameras:
+        raise ValueError(
+            f"CAMERAS lists {len(entries)} cameras but MAX_CAMERAS is {max_cameras}"
+        )
+
+    cameras: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        camera_id, _, display_name = entry.partition(":")
+        camera_id = camera_id.strip()
+        display_name = display_name.strip() or camera_id
+        if not CAMERA_ID_PATTERN.match(camera_id):
+            raise ValueError(
+                f"CAMERAS id {camera_id!r} must be 1-32 chars of letters, digits, '-' or '_'"
+            )
+        if camera_id in seen:
+            raise ValueError(f"CAMERAS contains duplicate id {camera_id!r}")
+        seen.add(camera_id)
+        cameras.append((camera_id, display_name))
+    return tuple(cameras)
+
+
 def _path_env(name: str, default: Path) -> Path:
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -141,10 +185,26 @@ class Settings:
     metrics_enabled: bool
     auth_token: str
     auth_session_ttl: int
+    cameras: tuple[tuple[str, str], ...]
+    max_cameras: int
     static_dir: Path
+
+    @property
+    def camera_ids(self) -> tuple[str, ...]:
+        return tuple(camera_id for camera_id, _ in self.cameras)
+
+    @property
+    def default_camera_id(self) -> str:
+        """The camera every camera_id-less call site implicitly addresses."""
+        return self.cameras[0][0]
+
+    @property
+    def multi_camera(self) -> bool:
+        return len(self.cameras) > 1
 
 
 def get_settings() -> Settings:
+    max_cameras = _bounded_int_env("MAX_CAMERAS", 4, 1, 16)
     return Settings(
         host=os.getenv("HOST", "0.0.0.0"),
         port=_bounded_int_env("PORT", 8766, 1, 65535),
@@ -232,5 +292,11 @@ def get_settings() -> Settings:
         auth_session_ttl=_bounded_int_env(
             "AUTH_SESSION_TTL", 7 * 24 * 3600, 60, 30 * 24 * 3600
         ),
+        # Multi-camera allowlist. Empty = one implicit `default` channel, i.e.
+        # the original single-recorder behaviour. Detection parameters stay
+        # global; zones / alerts / history carry a camera_id because those are
+        # tied to a physical location and would be meaningless if merged.
+        cameras=parse_cameras(os.getenv("CAMERAS", ""), max_cameras),
+        max_cameras=max_cameras,
         static_dir=ROOT_DIR / "static",
     )

@@ -99,6 +99,13 @@ class YoloDetector:
         self._classifier_lock = threading.Lock()
         self._classifier_error: str | None = None
         self._models: dict[str, Any] = {}
+        # Extra model instances, one per non-primary camera, keyed by
+        # (mode, tracker_key). Ultralytics keeps its tracker state inside the
+        # model object, so two streams sharing one instance would interleave
+        # their track ids; a dedicated instance per stream is the only reliable
+        # isolation. Costs one extra copy of the weights per extra camera, and
+        # is only ever populated when tracking is on and >1 camera streams.
+        self._tracker_models: dict[tuple[str, str], Any] = {}
         # The artifact actually loaded per mode (a `.pt`, or an auto-exported
         # `.engine`/`.onnx`) — may differ from the configured model name.
         self._loaded_sources: dict[str, str] = {}
@@ -239,6 +246,8 @@ class YoloDetector:
         self._models.pop(mode, None)
         self._names_by_mode.pop(mode, None)
         self._open_vocab_applied.pop(mode, None)
+        for key in [key for key in self._tracker_models if key[0] == mode]:
+            self._tracker_models.pop(key, None)
 
     def _set_classes(self, classes: Any) -> None:
         if isinstance(classes, str):
@@ -251,6 +260,10 @@ class YoloDetector:
         self._reapply_open_vocabulary()
 
     def _reapply_open_vocabulary(self) -> None:
+        # Per-camera tracker instances share the configured vocabulary; they are
+        # not part of `_names_by_mode` bookkeeping since the names are identical.
+        for model in self._tracker_models.values():
+            self._apply_open_vocabulary(model)
         for mode, model in self._models.items():
             applied = self._apply_open_vocabulary(model)
             self._open_vocab_applied[mode] = applied
@@ -313,6 +326,10 @@ class YoloDetector:
             "img_size": self._img_size,
             "track_enabled": self._track_enabled,
             "tracker": self._tracker,
+            # Extra model instances held for non-primary cameras (see
+            # `_ensure_tracker_model`); each one costs another copy of the
+            # weights, so this is the number to watch when adding cameras.
+            "tracker_streams": len(self._tracker_models),
             "classifier_model": self._classifier_name,
             "classifier_enabled": bool(self._classifier_name),
             "classifier_loaded": self._classifier_model is not None,
@@ -328,9 +345,20 @@ class YoloDetector:
             "last_warmup_error": self._last_warmup_error,
         }
 
-    def detect(self, jpeg_bytes: bytes, frame_id: int) -> dict[str, Any]:
+    def detect(
+        self, jpeg_bytes: bytes, frame_id: int, tracker_key: str | None = None
+    ) -> dict[str, Any]:
+        """Run detection on one frame.
+
+        ``tracker_key`` selects which stream's tracker state to advance. ``None``
+        (the single-camera path) uses the primary model exactly as before; any
+        other key gets its own model instance so track ids stay per-stream.
+        """
         decoded = self._decode_jpeg(jpeg_bytes)
         model = self._ensure_model()
+        names = self._names_by_mode.get(self._mode, {})
+        if tracker_key is not None and self._track_enabled:
+            model = self._ensure_tracker_model(tracker_key)
 
         started = time.perf_counter()
         try:
@@ -339,7 +367,7 @@ class YoloDetector:
             raise DetectionError(f"YOLO inference failed: {exc}") from exc
 
         inference_ms = (time.perf_counter() - started) * 1000.0
-        boxes = self._extract_boxes(results[0], decoded.width, decoded.height)
+        boxes = self._extract_boxes(results[0], decoded.width, decoded.height, names)
         if boxes and self._classifier_name:
             self._classify_boxes(boxes, decoded.data, decoded.width, decoded.height)
         return {
@@ -458,6 +486,46 @@ class YoloDetector:
             self._names_by_mode[mode] = resolved_names
             self._open_vocab_applied[mode] = applied
             self._names = resolved_names
+            self._load_error = None
+            return model
+
+    def _ensure_tracker_model(self, tracker_key: str) -> Any:
+        """Lazily build the dedicated model instance backing one extra stream.
+
+        Loads the same artifact the primary model resolved to, so an exported
+        ``.engine``/``.onnx`` is reused rather than re-exported. Shares
+        ``_load_lock`` with :meth:`_ensure_model` since both compete for the same
+        weights on disk / device memory.
+        """
+        cache_key = (self._mode, tracker_key)
+        cached = self._tracker_models.get(cache_key)
+        if cached is not None:
+            return cached
+
+        with self._load_lock:
+            cached = self._tracker_models.get(cache_key)
+            if cached is not None:
+                return cached
+
+            try:
+                from ultralytics import YOLO
+            except Exception as exc:
+                self._load_error = f"YOLO dependencies are not installed: {exc}"
+                raise DetectionError(self._load_error) from exc
+
+            load_name = self._loaded_sources.get(
+                self._mode, self._model_name_for_mode(self._mode)
+            )
+            try:
+                model = YOLO(load_name)
+                self._apply_open_vocabulary(model)
+            except Exception as exc:
+                self._load_error = (
+                    f"Could not load YOLO model {load_name!r} for stream {tracker_key!r}: {exc}"
+                )
+                raise DetectionError(self._load_error) from exc
+
+            self._tracker_models[cache_key] = model
             self._load_error = None
             return model
 
@@ -717,7 +785,12 @@ class YoloDetector:
             "confidence": round(confidence, 4),
         }
 
-    def _extract_boxes(self, result: Any, width: int, height: int) -> list[dict[str, Any]]:
+    def _extract_boxes(
+        self, result: Any, width: int, height: int, names: dict[int, str] | None = None
+    ) -> list[dict[str, Any]]:
+        # `names` is passed in rather than read off `self._names` so a config
+        # swap racing the worker can never label boxes from the wrong vocabulary.
+        resolved_names = self._names if names is None else names
         extracted: list[dict[str, Any]] = []
         result_boxes = getattr(result, "boxes", None)
         if result_boxes is None:
@@ -731,7 +804,7 @@ class YoloDetector:
                 {
                     "xyxy": clamp_xyxy(xyxy, width, height),
                     "class_id": class_id,
-                    "label": self._names.get(class_id, str(class_id)),
+                    "label": resolved_names.get(class_id, str(class_id)),
                     "confidence": round(confidence, 4),
                     # None until the tracker confirms this box (or when tracking
                     # is off / the tracker hasn't assigned an id this frame).

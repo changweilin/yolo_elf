@@ -6,6 +6,16 @@
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8799"],
       "port": 8799
+    },
+    {
+      "name": "yolo-elf-multicam",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:CAMERAS='front:Front Door,back:Back Yard'; $env:YOLO_MODEL='yolov8n.pt'; $env:YOLO_DEVICE='cpu'; $env:IMG_SIZE='320'; $env:EVENT_LOG_ENABLED='0'; .venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8798"
+      ],
+      "port": 8798
     }
   ]
 }

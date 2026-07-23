@@ -23,10 +23,14 @@ class _ActiveSighting:
     frames: int
     max_confidence: float
     zones: set[str] = field(default_factory=set)
+    camera_id: str | None = None
 
 
 class SightingAggregator:
-    """Folds per-frame tracked boxes into one row per object (by ``track_id``).
+    """Folds per-frame tracked boxes into one row per object.
+
+    Keyed by ``(camera_id, track_id)``: tracker ids restart per stream, so two
+    cameras would otherwise collide and merge unrelated objects into one row.
 
     Pure in-memory bookkeeping — no I/O. ``observe`` is called on the hot path
     for every frame; ``take_expired`` hands finished sightings to the store once
@@ -34,13 +38,15 @@ class SightingAggregator:
     """
 
     def __init__(self) -> None:
-        self._active: dict[int, _ActiveSighting] = {}
+        self._active: dict[tuple[str | None, int], _ActiveSighting] = {}
 
     @property
     def active_count(self) -> int:
         return len(self._active)
 
-    def observe(self, detection: dict[str, Any], now: float) -> None:
+    def observe(
+        self, detection: dict[str, Any], now: float, camera_id: str | None = None
+    ) -> None:
         if detection.get("error"):
             return
         for box in detection.get("boxes") or []:
@@ -52,9 +58,10 @@ class SightingAggregator:
             label = str(box.get("label", ""))
             zones = {str(zone) for zone in (box.get("zones") or [])}
 
-            current = self._active.get(track_id)
+            key = (camera_id, track_id)
+            current = self._active.get(key)
             if current is None:
-                self._active[track_id] = _ActiveSighting(
+                self._active[key] = _ActiveSighting(
                     track_id=track_id,
                     label=label,
                     first_seen=now,
@@ -62,6 +69,7 @@ class SightingAggregator:
                     frames=1,
                     max_confidence=confidence,
                     zones=zones,
+                    camera_id=camera_id,
                 )
                 continue
 
@@ -75,12 +83,12 @@ class SightingAggregator:
                 current.label = label
 
     def take_expired(self, now: float, expiry_sec: float) -> list[dict[str, Any]]:
-        expired_ids = [
-            track_id
-            for track_id, sighting in self._active.items()
+        expired_keys = [
+            key
+            for key, sighting in self._active.items()
             if now - sighting.last_seen > expiry_sec
         ]
-        return [self._finalize(self._active.pop(track_id)) for track_id in expired_ids]
+        return [self._finalize(self._active.pop(key)) for key in expired_keys]
 
     def take_all(self) -> list[dict[str, Any]]:
         finalized = [self._finalize(sighting) for sighting in self._active.values()]
@@ -90,6 +98,7 @@ class SightingAggregator:
     @staticmethod
     def _finalize(sighting: _ActiveSighting) -> dict[str, Any]:
         return {
+            "camera_id": sighting.camera_id,
             "track_id": sighting.track_id,
             "label": sighting.label,
             "first_seen": sighting.first_seen,
@@ -113,6 +122,7 @@ class EventStore:
         self.settings = settings
         self.enabled = settings.event_log_enabled
         self.path = settings.event_db_path
+        self.default_camera_id = settings.default_camera_id
         self._initialized = False
         self.sightings_written = 0
 
@@ -132,12 +142,25 @@ class EventStore:
                 last_seen REAL,
                 frames INTEGER,
                 max_confidence REAL,
-                zones TEXT
+                zones TEXT,
+                camera_id TEXT
             )
             """
         )
+        # Databases written before multi-camera predate the column. Add it in
+        # place rather than rebuilding the table; existing rows keep camera_id
+        # NULL and are read back as the default camera.
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(sightings)").fetchall()
+        }
+        if "camera_id" not in columns:
+            connection.execute("ALTER TABLE sightings ADD COLUMN camera_id TEXT")
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_sightings_last_seen ON sightings(last_seen)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sightings_camera ON sightings(camera_id)"
         )
 
     async def write(self, rows: list[dict[str, Any]]) -> None:
@@ -155,11 +178,14 @@ class EventStore:
             connection.executemany(
                 """
                 INSERT INTO sightings
-                    (track_id, label, first_seen, last_seen, frames, max_confidence, zones)
-                VALUES (:track_id, :label, :first_seen, :last_seen, :frames, :max_confidence, :zones)
+                    (track_id, label, first_seen, last_seen, frames, max_confidence,
+                     zones, camera_id)
+                VALUES (:track_id, :label, :first_seen, :last_seen, :frames, :max_confidence,
+                        :zones, :camera_id)
                 """,
                 [
                     {
+                        "camera_id": row.get("camera_id") or self.default_camera_id,
                         "track_id": row["track_id"],
                         "label": row["label"],
                         "first_seen": row["first_seen"],
@@ -180,10 +206,13 @@ class EventStore:
         until: float | None = None,
         label: str | None = None,
         zone: str | None = None,
+        camera_id: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self.enabled:
             return []
-        return await asyncio.to_thread(self._query_sync, limit, since, until, label, zone)
+        return await asyncio.to_thread(
+            self._query_sync, limit, since, until, label, zone, camera_id
+        )
 
     def _query_sync(
         self,
@@ -192,11 +221,20 @@ class EventStore:
         until: float | None,
         label: str | None,
         zone: str | None,
+        camera_id: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
         clauses: list[str] = []
         params: list[Any] = []
+        if camera_id:
+            if camera_id == self.default_camera_id:
+                # Rows written before the column existed are NULL and belong to
+                # the (then only) default camera.
+                clauses.append("(camera_id = ? OR camera_id IS NULL)")
+            else:
+                clauses.append("camera_id = ?")
+            params.append(camera_id)
         if since is not None:
             clauses.append("last_seen >= ?")
             params.append(since)
@@ -218,11 +256,16 @@ class EventStore:
         sql = f"SELECT * FROM sightings{where} ORDER BY first_seen DESC LIMIT ?"
 
         with self._connect() as connection:
+            # A DB written by an older build has no camera_id column, which would
+            # make the filter above fail; migrate on read too so /history works
+            # against an existing file before the first new write lands.
+            if not self._initialized:
+                self._ensure_schema(connection)
+                self._initialized = True
             rows = connection.execute(sql, params).fetchall()
         return [self._row_to_public(row) for row in rows]
 
-    @staticmethod
-    def _row_to_public(row: sqlite3.Row) -> dict[str, Any]:
+    def _row_to_public(self, row: sqlite3.Row) -> dict[str, Any]:
         first_seen = row["first_seen"]
         last_seen = row["last_seen"]
         try:
@@ -230,6 +273,7 @@ class EventStore:
         except (ValueError, TypeError):
             zones = []
         return {
+            "camera_id": row["camera_id"] or self.default_camera_id,
             "track_id": row["track_id"],
             "label": row["label"],
             "first_seen": first_seen,

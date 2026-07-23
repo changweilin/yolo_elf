@@ -1,7 +1,7 @@
 import asyncio
 
 from app.config import get_settings
-from app.stream_state import StreamHub
+from app.stream_state import StreamRegistry
 
 
 class _FakeViewer:
@@ -18,7 +18,7 @@ class _FakeViewer:
 
 
 def test_broadcast_alert_sends_events_to_viewers():
-    hub = StreamHub(get_settings())
+    hub = StreamRegistry(get_settings())
     viewer = _FakeViewer()
     event = {"type": "alert", "rule": "person", "count": 2}
 
@@ -31,7 +31,7 @@ def test_broadcast_alert_sends_events_to_viewers():
 
 
 def test_broadcast_alert_drops_dead_viewer():
-    hub = StreamHub(get_settings())
+    hub = StreamRegistry(get_settings())
     viewer = _FakeViewer(fail=True)
 
     async def run():
@@ -43,7 +43,7 @@ def test_broadcast_alert_drops_dead_viewer():
 
 
 def test_broadcast_alert_noop_without_events():
-    hub = StreamHub(get_settings())
+    hub = StreamRegistry(get_settings())
     viewer = _FakeViewer()
 
     async def run():

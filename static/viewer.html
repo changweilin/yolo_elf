@@ -6,14 +6,19 @@
     <title>YOLO Elf Viewer</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="/static/app.css?v=ui-5" />
+    <link rel="stylesheet" href="/static/app.css?v=ui-6" />
   </head>
   <body>
     <main class="viewer-shell">
-      <section class="viewer-stage" aria-label="detected stream">
-        <img id="viewerImage" alt="Detection preview" />
-        <canvas id="viewerOverlay"></canvas>
-        <div id="emptyState" class="empty-state">Waiting for frames</div>
+      <!-- One pane per camera. With a single camera the stage renders exactly
+           one full-bleed pane, which is the original single-stream layout. -->
+      <section class="viewer-stage" id="viewerStage" data-count="1" aria-label="detected stream">
+        <div class="viewer-pane" id="viewerPanePrimary">
+          <img id="viewerImage" class="pane-image" alt="Detection preview" />
+          <canvas id="viewerOverlay" class="pane-overlay"></canvas>
+          <div id="emptyState" class="empty-state">Waiting for frames</div>
+          <span class="pane-label" hidden></span>
+        </div>
       </section>
 
       <header class="hud topbar">
@@ -116,6 +121,10 @@
             <div id="uploadMetric" class="metric-value">-</div>
           </div>
         </div>
+        <div id="cameraBar" class="panel-control camera-bar" hidden>
+          <span class="panel-control-label">相機</span>
+          <div id="cameraTabs" class="filter-chips"></div>
+        </div>
         <div class="panel-control view-filter">
           <div class="view-filter-head">
             <span class="panel-control-label">顯示過濾</span>
@@ -147,6 +156,6 @@
         <div id="errorLine" class="error-line" hidden></div>
       </aside>
     </main>
-    <script type="module" src="/static/viewer.js?v=viewfilter-1"></script>
+    <script type="module" src="/static/viewer.js?v=multicam-1"></script>
   </body>
 </html>

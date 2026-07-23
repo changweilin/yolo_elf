@@ -1,3 +1,5 @@
+const stage = document.querySelector("#viewerStage");
+const primaryPaneEl = document.querySelector("#viewerPanePrimary");
 const image = document.querySelector("#viewerImage");
 const overlay = document.querySelector("#viewerOverlay");
 const emptyState = document.querySelector("#emptyState");
@@ -33,6 +35,11 @@ const moduleUrl = new URL(import.meta.url);
 const demoMode =
   window.YOLO_ELF_DEMO_MODE === true || moduleUrl.searchParams.get("demo") === "1";
 
+// /viewer?camera_id=back pins this tab to one camera: the socket subscribes to
+// that stream only (no bandwidth spent on frames this tab will not draw) and the
+// stage shows just its pane. Read from the page URL, not the module URL.
+const pinnedCamera = new URLSearchParams(window.location.search).get("camera_id") || "";
+
 const demoDetection = {
   frame_id: 42,
   width: 1280,
@@ -47,6 +54,27 @@ const demoDetection = {
   error: "",
 };
 
+// A second demo stream so the static build shows what the multi-camera grid
+// looks like. Track ids restart per camera — #1 here is a different object from
+// #1 above, which is exactly the property the backend guarantees.
+const demoDetectionBack = {
+  frame_id: 41,
+  width: 1280,
+  height: 720,
+  inference_ms: 21.4,
+  boxes: [
+    { xyxy: [212, 244, 470, 604], class_id: 3, label: "person", confidence: 0.81, track_id: 1, zones: [] },
+    { xyxy: [820, 188, 1104, 452], class_id: 4, label: "bicycle", confidence: 0.69, track_id: 2, zones: [] },
+  ],
+  zone_counts: {},
+  error: "",
+};
+
+const demoCameras = [
+  { camera_id: "front", display_name: "前門" },
+  { camera_id: "back", display_name: "後院" },
+];
+
 const demoZones = [
   { name: "doorway", anchor: "center", points: [[0.05, 0.2], [0.35, 0.2], [0.35, 0.95], [0.05, 0.95]] },
 ];
@@ -59,6 +87,9 @@ const zoneUndoButton = document.querySelector("#zoneUndoButton");
 const zoneClearButton = document.querySelector("#zoneClearButton");
 const zoneList = document.querySelector("#zoneList");
 
+const cameraBar = document.querySelector("#cameraBar");
+const cameraTabs = document.querySelector("#cameraTabs");
+
 const classFilterList = document.querySelector("#classFilterList");
 const viewerMinConf = document.querySelector("#viewerMinConf");
 const viewerMinConfValue = document.querySelector("#viewerMinConfValue");
@@ -67,12 +98,19 @@ const saveFrameHint = document.querySelector("#saveFrameHint");
 
 const state = {
   ws: null,
-  latestDetection: null,
   pendingFrame: null,
-  imageUrl: null,
   reconnectTimer: null,
-  zones: [],
-  zoneCounts: {},
+  // camera_id -> pane. Insertion order drives the grid layout, so it mirrors
+  // the server's CAMERAS order and stays stable while a camera is offline.
+  panes: new Map(),
+  cameras: [],
+  multiCamera: false,
+  // The camera enlarged to fill the stage; null = grid view. Zone editing needs
+  // an unambiguous pane, so it is only offered when exactly one pane is showing.
+  focus: null,
+  layoutSignature: null,
+  lastCameraId: null,
+  zonesByCamera: {},
   editor: { active: false, draft: [] },
   // Viewer-only display filters (never touch the backend / detector).
   knownClasses: new Set(),
@@ -104,6 +142,213 @@ function setChip(element, text, tone) {
   element.classList.add(tone);
 }
 
+// --- panes --------------------------------------------------------------------
+
+// The primary pane wraps the markup already in viewer.html, so a single-camera
+// viewer never builds any DOM at runtime and behaves exactly as before. It is
+// always pane index 0 and is re-labelled rather than replaced when the server
+// names the first camera (the bootstrap "" id becomes e.g. "default").
+let primaryPane = null;
+
+function newPane(root, paneImage, paneOverlay, paneEmpty, paneLabel) {
+  const pane = {
+    cameraId: "",
+    displayName: "",
+    root,
+    image: paneImage,
+    overlay: paneOverlay,
+    empty: paneEmpty,
+    label: paneLabel,
+    detection: null,
+    imageUrl: null,
+    zoneCounts: {},
+  };
+  pane.image.addEventListener("load", () => {
+    pane.empty.hidden = true;
+  });
+  // Click a pane to enlarge it; click the enlarged pane to go back to the grid.
+  pane.root.addEventListener("click", (event) => {
+    if (state.editor.active || !state.multiCamera) {
+      return;
+    }
+    event.preventDefault();
+    setFocus(state.focus === pane.cameraId ? null : pane.cameraId);
+  });
+  return pane;
+}
+
+function createPrimaryPane() {
+  return newPane(
+    primaryPaneEl,
+    image,
+    overlay,
+    emptyState,
+    primaryPaneEl.querySelector(".pane-label"),
+  );
+}
+
+function createExtraPane(displayName) {
+  const root = document.createElement("div");
+  root.className = "viewer-pane";
+  const paneImage = document.createElement("img");
+  paneImage.className = "pane-image";
+  paneImage.alt = `Detection preview (${displayName})`;
+  const paneOverlay = document.createElement("canvas");
+  paneOverlay.className = "pane-overlay";
+  const paneEmpty = document.createElement("div");
+  paneEmpty.className = "empty-state";
+  paneEmpty.textContent = "Waiting for frames";
+  const paneLabel = document.createElement("span");
+  paneLabel.className = "pane-label";
+  root.append(paneImage, paneOverlay, paneEmpty, paneLabel);
+  stage.append(root);
+  return newPane(root, paneImage, paneOverlay, paneEmpty, paneLabel);
+}
+
+function rebindPane(pane, cameraId, displayName) {
+  pane.cameraId = cameraId;
+  pane.displayName = displayName;
+  pane.root.dataset.cameraId = cameraId;
+  if (pane.label) {
+    pane.label.textContent = displayName || cameraId;
+    pane.label.hidden = false;
+  }
+}
+
+function syncPanes(cameras) {
+  const wanted = cameras.length ? cameras : [{ camera_id: "", display_name: "" }];
+  const next = new Map();
+
+  wanted.forEach((camera, index) => {
+    const cameraId = camera.camera_id || "";
+    const displayName = camera.display_name || cameraId;
+    let pane;
+    if (index === 0) {
+      primaryPane = primaryPane || createPrimaryPane();
+      pane = primaryPane;
+    } else {
+      pane = state.panes.get(cameraId);
+      if (!pane || pane === primaryPane) {
+        pane = createExtraPane(displayName);
+      }
+    }
+    rebindPane(pane, cameraId, displayName);
+    next.set(cameraId, pane);
+  });
+
+  for (const pane of state.panes.values()) {
+    if (pane === primaryPane || next.has(pane.cameraId)) {
+      continue;
+    }
+    releasePaneUrl(pane);
+    pane.root.remove();
+  }
+  state.panes = next;
+
+  state.multiCamera = state.panes.size > 1;
+  if (state.focus && !state.panes.has(state.focus)) {
+    state.focus = null;
+  }
+  const signature = `${Array.from(state.panes.keys()).join("|")}#${state.focus ?? ""}`;
+  if (signature !== state.layoutSignature) {
+    state.layoutSignature = signature;
+    applyFocus();
+    renderCameraTabs();
+    syncZoneEditorAvailability();
+  }
+}
+
+function setFocus(cameraId) {
+  state.focus = cameraId;
+  state.layoutSignature = `${Array.from(state.panes.keys()).join("|")}#${cameraId ?? ""}`;
+  applyFocus();
+  renderCameraTabs();
+  syncZoneEditorAvailability();
+  renderZoneList();
+}
+
+function applyFocus() {
+  stage.classList.toggle("is-focused", Boolean(state.focus));
+  for (const [cameraId, pane] of state.panes) {
+    pane.root.classList.toggle("is-focused", cameraId === state.focus);
+  }
+  // Square-ish grid: 2 cameras -> 1x2, 3-4 -> 2x2, up to 16 -> 4x4. Driven from
+  // JS so any MAX_CAMERAS value lays out sensibly without a CSS rule per count.
+  const visible = state.focus ? 1 : state.panes.size;
+  const columns = Math.max(1, Math.ceil(Math.sqrt(visible)));
+  stage.dataset.count = String(visible);
+  stage.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
+  stage.style.gap = visible > 1 ? "2px" : "0";
+}
+
+function renderCameraTabs() {
+  if (!cameraBar || !cameraTabs) {
+    return;
+  }
+  cameraBar.hidden = !state.multiCamera;
+  if (!state.multiCamera) {
+    return;
+  }
+  cameraTabs.textContent = "";
+  const entries = [{ id: null, name: "全部" }].concat(
+    Array.from(state.panes.values()).map((pane) => ({
+      id: pane.cameraId,
+      name: pane.displayName || pane.cameraId,
+    })),
+  );
+  for (const entry of entries) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "filter-chip";
+    chip.textContent = entry.name;
+    const active = state.focus === entry.id;
+    chip.classList.toggle("is-off", !active);
+    chip.setAttribute("aria-pressed", active ? "true" : "false");
+    chip.addEventListener("click", () => setFocus(entry.id));
+    cameraTabs.append(chip);
+  }
+}
+
+// The pane whose numbers the metrics panel and the save/zone tools act on: the
+// focused one, or the only one, else whichever camera last delivered a frame.
+function activePane() {
+  if (state.focus) {
+    return state.panes.get(state.focus) || null;
+  }
+  if (state.panes.size === 1) {
+    return state.panes.values().next().value;
+  }
+  return state.panes.get(state.lastCameraId) || null;
+}
+
+// A single pane is showing, so a click on the stage maps to exactly one camera.
+function soloPane() {
+  if (state.panes.size === 1) {
+    return state.panes.values().next().value;
+  }
+  return state.focus ? state.panes.get(state.focus) || null : null;
+}
+
+function visiblePanes() {
+  const solo = state.focus ? state.panes.get(state.focus) : null;
+  return solo ? [solo] : Array.from(state.panes.values());
+}
+
+function releasePaneUrl(pane) {
+  if (pane.imageUrl) {
+    URL.revokeObjectURL(pane.imageUrl);
+    pane.imageUrl = null;
+  }
+}
+
+function releaseImageUrls() {
+  for (const pane of state.panes.values()) {
+    releasePaneUrl(pane);
+  }
+}
+
+// --- transport ----------------------------------------------------------------
+
 function connectViewer() {
   if (demoMode) {
     renderDemoViewer();
@@ -111,7 +356,10 @@ function connectViewer() {
   }
 
   setChip(viewerSocketStatus, "viewer connecting", "warn");
-  const ws = new WebSocket(socketUrl("/ws/viewer"));
+  const path = pinnedCamera
+    ? `/ws/viewer?camera_id=${encodeURIComponent(pinnedCamera)}`
+    : "/ws/viewer";
+  const ws = new WebSocket(socketUrl(path));
   ws.binaryType = "blob";
   state.ws = ws;
 
@@ -172,14 +420,28 @@ function renderDemoViewer() {
   if (zoneEditToggle) {
     zoneEditToggle.disabled = true;
   }
-  state.zones = demoZones;
+  syncPanes(demoCameras);
+  state.zonesByCamera = { front: demoZones };
   renderZoneList();
   droppedMetric.textContent = "0";
   recordingMetric.textContent = "0";
   uploadMetric.textContent = "0";
-  state.latestDetection = demoDetection;
-  image.src = staticAsset("demo-frame.svg");
-  emptyState.hidden = true;
+  const frames = [
+    ["front", demoDetection],
+    ["back", demoDetectionBack],
+  ];
+  for (const [cameraId, detection] of frames) {
+    const pane = state.panes.get(cameraId);
+    if (!pane) {
+      continue;
+    }
+    pane.detection = detection;
+    pane.zoneCounts = detection.zone_counts || {};
+    pane.image.src = staticAsset("demo-frame.svg");
+    pane.empty.hidden = true;
+    collectClasses(detection);
+  }
+  state.lastCameraId = "front";
   renderMetrics(demoDetection);
   renderError("");
 }
@@ -191,28 +453,32 @@ function renderFrameBytes(data) {
   }
   state.pendingFrame = null;
 
+  const pane = state.panes.get(frame.camera_id || "") || activePane();
+  if (!pane) {
+    return;
+  }
+
   const blob =
     data instanceof Blob
       ? data
       : new Blob([data], { type: frame.content_type || "image/jpeg" });
   const nextUrl = URL.createObjectURL(blob);
-  const previousUrl = state.imageUrl;
-  state.imageUrl = nextUrl;
-  image.src = nextUrl;
+  const previousUrl = pane.imageUrl;
+  pane.imageUrl = nextUrl;
+  pane.image.src = nextUrl;
   if (previousUrl) {
     URL.revokeObjectURL(previousUrl);
   }
 
-  state.latestDetection = frame.detection;
-  emptyState.hidden = true;
-  renderMetrics(frame.detection);
-  renderError(frame.detection.error || "");
-}
-
-function releaseImageUrl() {
-  if (state.imageUrl) {
-    URL.revokeObjectURL(state.imageUrl);
-    state.imageUrl = null;
+  pane.detection = frame.detection;
+  pane.zoneCounts = frame.detection.zone_counts || {};
+  pane.empty.hidden = true;
+  state.lastCameraId = pane.cameraId;
+  collectClasses(frame.detection);
+  const active = activePane();
+  if (!active || active === pane) {
+    renderMetrics(frame.detection);
+    renderError(frame.detection.error || "");
   }
 }
 
@@ -245,13 +511,36 @@ function renderPhoneStorage(status) {
   }
 }
 
-function renderStatus(status) {
+function renderCameraLink(streams) {
+  if (streams.length > 1) {
+    const online = streams.filter((stream) => stream.camera_connected).length;
+    setChip(
+      cameraLinkStatus,
+      `${online}/${streams.length} cameras`,
+      online === streams.length ? "good" : online ? "warn" : "bad",
+    );
+    return;
+  }
+  const connected = streams.some((stream) => stream.camera_connected);
   setChip(
     cameraLinkStatus,
-    status.camera_connected ? "phone connected" : "phone idle",
-    status.camera_connected ? "good" : "warn",
+    connected ? "phone connected" : "phone idle",
+    connected ? "good" : "warn",
   );
-  renderPhoneStorage(status);
+}
+
+function renderStatus(status) {
+  const streams = Object.values(status.cameras || {}).filter(
+    (stream) => !pinnedCamera || stream.camera_id === pinnedCamera,
+  );
+  syncPanes(
+    streams.map((stream) => ({
+      camera_id: stream.camera_id,
+      display_name: stream.display_name,
+    })),
+  );
+  renderCameraLink(streams);
+  renderPhoneStorage(streams.length === 1 ? streams[0] : status);
   renderModel(status.detector || {});
   droppedMetric.textContent = String(status.frames_dropped ?? "-");
   const recordings = status.recordings || {};
@@ -271,10 +560,14 @@ function renderStatus(status) {
 }
 
 function renderZones(zones) {
-  // Saved zones are server-owned; the in-progress draft lives in state.editor,
-  // so refreshing this list never disturbs an active drawing.
-  state.zones = (zones && zones.zones) || [];
+  // Saved zones are server-owned and per camera; the in-progress draft lives in
+  // state.editor, so refreshing this list never disturbs an active drawing.
+  state.zonesByCamera = (zones && zones.cameras) || {};
   renderZoneList();
+}
+
+function zonesFor(cameraId) {
+  return state.zonesByCamera[cameraId] || state.zonesByCamera[""] || [];
 }
 
 // Keep a just-fired alert on screen briefly instead of letting the 1s status
@@ -285,9 +578,11 @@ function handleAlert(event) {
   if (!alertStatus) {
     return;
   }
-  setChip(alertStatus, `⚠ ${event.rule} ×${event.count}`, "bad");
+  const pane = event.camera_id ? state.panes.get(event.camera_id) : null;
+  const prefix = state.multiCamera && pane ? `${pane.displayName} · ` : "";
+  setChip(alertStatus, `⚠ ${prefix}${event.rule} ×${event.count}`, "bad");
   alertFlash.until = Date.now() + 6000;
-  notifyBrowser(event);
+  notifyBrowser(event, pane);
 }
 
 function renderAlerts(alerts) {
@@ -302,13 +597,14 @@ function renderAlerts(alerts) {
   setChip(alertStatus, fired ? `alerts armed · ${fired}` : "alerts armed", "good");
 }
 
-function notifyBrowser(event) {
+function notifyBrowser(event, pane) {
   if (typeof Notification === "undefined") {
     return;
   }
+  const where = pane ? `${pane.displayName}: ` : "";
   const show = () => {
     try {
-      new Notification("YOLO Elf", { body: `${event.rule} ×${event.count}` });
+      new Notification("YOLO Elf", { body: `${where}${event.rule} ×${event.count}` });
     } catch {
       // Notifications are best-effort; ignore construction failures.
     }
@@ -360,13 +656,12 @@ function renderMetrics(detection) {
   frameMetric.textContent = String(detection.frame_id ?? "-");
   boxesMetric.textContent = String(detection.boxes?.length ?? 0);
   inferenceMetric.textContent = `${detection.inference_ms ?? 0} ms`;
-  state.zoneCounts = detection.zone_counts || {};
-  collectClasses(detection);
 }
 
 // Class chips are built from labels seen on the stream. New labels default to
 // visible; the chip set only re-renders when the known set actually grows, so a
-// user's toggles survive across frames.
+// user's toggles survive across frames. Labels pool across cameras on purpose —
+// hiding "car" should hide it everywhere.
 function collectClasses(detection) {
   let grew = false;
   for (const box of detection.boxes || []) {
@@ -423,7 +718,8 @@ function setViewerMinConf(value) {
 // letterbox offset) so the PNG matches the model's pixels, not the stretched
 // stage. Honors the same class / confidence filters the viewer is showing.
 function saveSnapshot() {
-  const detection = state.latestDetection;
+  const pane = activePane();
+  const detection = pane?.detection;
   if (!detection || !detection.width || !detection.height) {
     return;
   }
@@ -433,8 +729,8 @@ function saveSnapshot() {
     canvas.height = detection.height;
     const ctx = canvas.getContext("2d");
     const fit = { scale: 1, x: 0, y: 0 };
-    ctx.drawImage(image, 0, 0, detection.width, detection.height);
-    drawZones(ctx, detection, fit);
+    ctx.drawImage(pane.image, 0, 0, detection.width, detection.height);
+    drawZones(ctx, pane, detection, fit);
     drawBoxes(ctx, detection, fit);
     canvas.toBlob((blob) => {
       if (!blob) {
@@ -444,7 +740,8 @@ function saveSnapshot() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `yolo-elf-frame-${detection.frame_id ?? 0}.png`;
+      const suffix = state.multiCamera ? `${pane.cameraId}-` : "";
+      link.download = `yolo-elf-frame-${suffix}${detection.frame_id ?? 0}.png`;
       document.body.append(link);
       link.click();
       link.remove();
@@ -474,30 +771,46 @@ function renderError(message) {
   errorLine.textContent = message;
 }
 
-function resizeOverlay() {
-  const rect = overlay.getBoundingClientRect();
+function resizeOverlay(pane) {
+  const rect = pane.overlay.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  overlay.width = Math.max(1, Math.round(rect.width * dpr));
-  overlay.height = Math.max(1, Math.round(rect.height * dpr));
+  pane.overlay.width = Math.max(1, Math.round(rect.width * dpr));
+  pane.overlay.height = Math.max(1, Math.round(rect.height * dpr));
+}
+
+function resizeOverlays() {
+  for (const pane of state.panes.values()) {
+    resizeOverlay(pane);
+  }
 }
 
 function drawOverlay() {
-  resizeOverlay();
-  const ctx = overlay.getContext("2d");
+  // Only visible panes are drawn — a hidden pane has a zero-sized rect, so
+  // fitContain would divide by zero and paint nothing useful anyway.
+  for (const pane of visiblePanes()) {
+    drawPane(pane);
+  }
+  requestAnimationFrame(drawOverlay);
+}
+
+function drawPane(pane) {
+  resizeOverlay(pane);
+  const ctx = pane.overlay.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
-  const width = overlay.width / dpr;
-  const height = overlay.height / dpr;
+  const width = pane.overlay.width / dpr;
+  const height = pane.overlay.height / dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  const detection = state.latestDetection;
+  const detection = pane.detection;
   if (detection && detection.width > 0 && detection.height > 0) {
     const fit = fitContain(width, height, detection.width, detection.height);
-    drawZones(ctx, detection, fit);
+    drawZones(ctx, pane, detection, fit);
     drawBoxes(ctx, detection, fit);
-    drawDraft(ctx, detection, fit);
+    if (soloPane() === pane) {
+      drawDraft(ctx, detection, fit);
+    }
   }
-  requestAnimationFrame(drawOverlay);
 }
 
 // Viewer-side visibility: hidden classes and a min-confidence floor are pure
@@ -527,6 +840,7 @@ function drawBoxes(ctx, detection, fit) {
     // When the second-stage classifier named a species, show that as the
     // primary label (圖鑑); otherwise fall back to the detection class. A
     // tracker id (when present) is prefixed so an object is followable.
+    // Ids are per-camera: #3 on one pane is unrelated to #3 on another.
     const idPrefix = box.track_id != null ? `#${box.track_id} ` : "";
     const label = box.species
       ? `${idPrefix}${box.species} ${Math.round((box.species_confidence ?? 0) * 100)}%`
@@ -559,7 +873,8 @@ function colorForClass(classId) {
 }
 
 // ROI zones are stored normalized (0..1) to the source frame, so map them onto
-// the same letterboxed rectangle the frame is drawn in.
+// the same letterboxed rectangle the frame is drawn in. Each pane computes its
+// own fit, so a grid cell with a different aspect still lands correctly.
 function zonePointToStage(fit, detection, nx, ny) {
   return [fit.x + nx * detection.width * fit.scale, fit.y + ny * detection.height * fit.scale];
 }
@@ -577,15 +892,16 @@ function tracePolygon(ctx, points) {
   }
 }
 
-function drawZones(ctx, detection, fit) {
-  if (!state.zones.length) {
+function drawZones(ctx, pane, detection, fit) {
+  const zones = zonesFor(pane.cameraId);
+  if (!zones.length) {
     return;
   }
   ctx.lineWidth = 2;
   ctx.font = "600 13px system-ui, sans-serif";
   ctx.textBaseline = "top";
 
-  state.zones.forEach((zone, index) => {
+  zones.forEach((zone, index) => {
     const points = (zone.points || []).map(([nx, ny]) => zonePointToStage(fit, detection, nx, ny));
     if (points.length < 2) {
       return;
@@ -598,7 +914,7 @@ function drawZones(ctx, detection, fit) {
     ctx.strokeStyle = color;
     ctx.stroke();
 
-    const count = state.zoneCounts?.[zone.name] ?? 0;
+    const count = pane.zoneCounts?.[zone.name] ?? 0;
     const label = `${zone.name} · ${count}`;
     const [lx, ly] = points[0];
     const top = Math.max(0, ly - 22);
@@ -645,12 +961,14 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
-function stageToNormalized(clientX, clientY) {
-  const detection = state.latestDetection;
+// --- zone editor --------------------------------------------------------------
+
+function stageToNormalized(pane, clientX, clientY) {
+  const detection = pane?.detection;
   if (!detection || !detection.width || !detection.height) {
     return null;
   }
-  const rect = overlay.getBoundingClientRect();
+  const rect = pane.overlay.getBoundingClientRect();
   const fit = fitContain(rect.width, rect.height, detection.width, detection.height);
   const px = (clientX - rect.left - fit.x) / fit.scale;
   const py = (clientY - rect.top - fit.y) / fit.scale;
@@ -665,12 +983,32 @@ function updateDraftHint(message) {
     zoneDraftHint.textContent = message;
     return;
   }
-  zoneDraftHint.textContent = state.latestDetection
+  const pane = soloPane();
+  zoneDraftHint.textContent = pane?.detection
     ? `已加入 ${state.editor.draft.length} 點（至少 3 點）`
     : "等待畫面出現後再點擊繪製";
 }
 
+// Drawing needs one unambiguous frame to map clicks into, so editing is offered
+// only when a single pane fills the stage. In the grid, pick a camera first.
+function syncZoneEditorAvailability() {
+  if (!zoneEditToggle || demoMode) {
+    return;
+  }
+  const solo = soloPane();
+  zoneEditToggle.disabled = !solo;
+  zoneEditToggle.title = solo ? "" : "先點選一路相機再編輯區域";
+  if (!solo && state.editor.active) {
+    setEditor(false);
+  }
+}
+
 function setEditor(active) {
+  const pane = soloPane();
+  if (active && !pane) {
+    updateDraftHint("先點選一路相機再編輯區域");
+    return;
+  }
   state.editor.active = active;
   state.editor.draft = [];
   if (zoneDraftBar) {
@@ -679,10 +1017,13 @@ function setEditor(active) {
   if (zoneEditToggle) {
     zoneEditToggle.textContent = active ? "完成編輯" : "編輯";
   }
-  // The overlay is pointer-events:none by default; enable it only while editing
-  // so normal viewing never intercepts clicks.
-  overlay.style.pointerEvents = active ? "auto" : "";
-  overlay.style.cursor = active ? "crosshair" : "";
+  // Overlays are pointer-events:none by default; enable only the pane being
+  // edited so normal viewing never intercepts clicks.
+  for (const candidate of state.panes.values()) {
+    const editing = active && candidate === pane;
+    candidate.overlay.style.pointerEvents = editing ? "auto" : "";
+    candidate.overlay.style.cursor = editing ? "crosshair" : "";
+  }
   updateDraftHint();
 }
 
@@ -690,11 +1031,13 @@ function onStageClick(event) {
   if (!state.editor.active) {
     return;
   }
-  const point = stageToNormalized(event.clientX, event.clientY);
+  const pane = soloPane();
+  const point = stageToNormalized(pane, event.clientX, event.clientY);
   if (!point) {
     updateDraftHint("等待畫面出現後再點擊繪製");
     return;
   }
+  event.stopPropagation();
   state.editor.draft.push(point);
   updateDraftHint();
 }
@@ -704,41 +1047,52 @@ function publicZone(zone) {
 }
 
 async function finishZone() {
+  const pane = soloPane();
+  if (!pane) {
+    updateDraftHint("先點選一路相機再編輯區域");
+    return;
+  }
   if (state.editor.draft.length < 3) {
     updateDraftHint("至少需要 3 點");
     return;
   }
-  const name = (window.prompt("區域名稱", `zone-${state.zones.length + 1}`) || "").trim();
+  const existing = zonesFor(pane.cameraId);
+  const name = (window.prompt("區域名稱", `zone-${existing.length + 1}`) || "").trim();
   if (!name) {
     return;
   }
   const zones = [
-    ...state.zones.map(publicZone),
+    ...existing.map(publicZone),
     { name, points: state.editor.draft.map(([x, y]) => [round4(x), round4(y)]), anchor: "center" },
   ];
-  if (await saveZones(zones)) {
+  if (await saveZones(pane.cameraId, zones)) {
     state.editor.draft = [];
     updateDraftHint();
   }
 }
 
-async function deleteZone(name) {
-  await saveZones(state.zones.filter((zone) => zone.name !== name).map(publicZone));
+async function deleteZone(cameraId, name) {
+  await saveZones(
+    cameraId,
+    zonesFor(cameraId)
+      .filter((zone) => zone.name !== name)
+      .map(publicZone),
+  );
 }
 
-async function saveZones(zones) {
+async function saveZones(cameraId, zones) {
   try {
     const response = await fetch("/api/zones", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ zones }),
+      body: JSON.stringify({ zones, camera_id: cameraId || undefined }),
     });
     if (!response.ok) {
       updateDraftHint("儲存失敗，請檢查頂點");
       return false;
     }
     const payload = await response.json();
-    state.zones = (payload.zones && payload.zones.zones) || [];
+    state.zonesByCamera = (payload.zones && payload.zones.cameras) || {};
     renderZoneList();
     return true;
   } catch {
@@ -752,21 +1106,36 @@ function renderZoneList() {
     return;
   }
   zoneList.textContent = "";
-  for (const zone of state.zones) {
-    const item = document.createElement("li");
-    item.className = "zone-list-item";
-    const label = document.createElement("span");
-    label.textContent = `${zone.name} (${(zone.points || []).length})`;
-    item.append(label);
-    if (!demoMode) {
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "compact-button";
-      remove.textContent = "刪除";
-      remove.addEventListener("click", () => deleteZone(zone.name));
-      item.append(remove);
+  // In the grid, list every camera's zones (prefixed) so nothing is hidden;
+  // focused on one camera, list just that camera's.
+  const pane = soloPane();
+  const cameraIds = pane
+    ? [pane.cameraId]
+    : Array.from(state.panes.keys()).filter((id) => zonesFor(id).length);
+  for (const cameraId of cameraIds) {
+    for (const zone of zonesFor(cameraId)) {
+      const item = document.createElement("li");
+      item.className = "zone-list-item";
+      const label = document.createElement("span");
+      const prefix =
+        state.multiCamera && !pane
+          ? `${state.panes.get(cameraId)?.displayName || cameraId} · `
+          : "";
+      label.textContent = `${prefix}${zone.name} (${(zone.points || []).length})`;
+      item.append(label);
+      if (!demoMode) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "compact-button";
+        remove.textContent = "刪除";
+        remove.addEventListener("click", (event) => {
+          event.stopPropagation();
+          deleteZone(cameraId, zone.name);
+        });
+        item.append(remove);
+      }
+      zoneList.append(item);
     }
-    zoneList.append(item);
   }
 }
 
@@ -791,10 +1160,6 @@ async function pollStatus() {
   }
 }
 
-image.addEventListener("load", () => {
-  emptyState.hidden = true;
-});
-
 for (const button of modeButtons) {
   button.addEventListener("click", () => setDetectMode(button.dataset.detectMode));
 }
@@ -809,13 +1174,17 @@ zoneClearButton?.addEventListener("click", () => {
   state.editor.draft = [];
   updateDraftHint();
 });
-overlay.addEventListener("click", onStageClick);
+stage.addEventListener("click", onStageClick);
 
 viewerMinConf?.addEventListener("input", (event) => setViewerMinConf(event.target.value));
 saveFrameButton?.addEventListener("click", saveSnapshot);
 
-window.addEventListener("resize", resizeOverlay);
-window.addEventListener("beforeunload", releaseImageUrl);
+window.addEventListener("resize", resizeOverlays);
+window.addEventListener("beforeunload", releaseImageUrls);
+
+// Bootstrap with the single implicit pane so the first paint (and the entire
+// single-camera path) needs no round trip; /api/status reconciles the rest.
+syncPanes([]);
 renderClassChips();
 if (viewerMinConf) {
   setViewerMinConf(viewerMinConf.value);
