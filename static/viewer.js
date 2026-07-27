@@ -21,6 +21,16 @@ const modeButtons = modeGroup
   ? Array.from(modeGroup.querySelectorAll("[data-detect-mode]"))
   : [];
 
+// Channel switch (YOLO ⇄ VLM). Hidden until /api/status reports the VLM channel
+// is enabled server-side. Purely a viewer-side toggle: it only changes which
+// channel's boxes this tab draws, never the backend.
+const channelGroupControl = document.querySelector("#channelGroupControl");
+const channelGroup = document.querySelector("#channelGroup");
+const channelButtons = channelGroup
+  ? Array.from(channelGroup.querySelectorAll("[data-channel]"))
+  : [];
+const vlmCaption = document.querySelector("#vlmCaption");
+
 import { createModelSwitch } from "./mode-switch.js";
 
 const modelSwitch = createModelSwitch({
@@ -70,6 +80,22 @@ const demoDetectionBack = {
   error: "",
 };
 
+// Open-vocab boxes for the VLM channel demo. Free-form phrases and no
+// confidence/track id are exactly what a real Florence-2 pass returns.
+const demoVlm = {
+  type: "vlm",
+  camera_id: "front",
+  frame_id: 42,
+  width: 1280,
+  height: 720,
+  inference_ms: 486.0,
+  boxes: [
+    { xyxy: [124, 137, 392, 535], class_id: -1, label: "a person standing by the door", confidence: 1.0, track_id: null },
+    { xyxy: [759, 219, 1062, 521], class_id: -1, label: "a cardboard delivery box", confidence: 1.0, track_id: null },
+  ],
+  description: "A person in a dark jacket stands at a front door beside a cardboard delivery box on the step.",
+};
+
 const demoCameras = [
   { camera_id: "front", display_name: "前門" },
   { camera_id: "back", display_name: "後院" },
@@ -110,6 +136,9 @@ const state = {
   focus: null,
   layoutSignature: null,
   lastCameraId: null,
+  // Which channel this tab draws: "yolo" (per-frame, tracked) or "vlm"
+  // (periodic open-vocab). Both ride the same JPEG underlay.
+  channel: "yolo",
   zonesByCamera: {},
   editor: { active: false, draft: [] },
   // Viewer-only display filters (never touch the backend / detector).
@@ -160,6 +189,8 @@ function newPane(root, paneImage, paneOverlay, paneEmpty, paneLabel) {
     empty: paneEmpty,
     label: paneLabel,
     detection: null,
+    // Latest VLM payload for this camera (open-vocab boxes + Phase 2 caption).
+    vlm: null,
     imageUrl: null,
     zoneCounts: {},
   };
@@ -265,6 +296,7 @@ function setFocus(cameraId) {
   renderCameraTabs();
   syncZoneEditorAvailability();
   renderZoneList();
+  updateVlmCaption();
 }
 
 function applyFocus() {
@@ -382,6 +414,10 @@ function connectViewer() {
       handleAlert(payload);
       return;
     }
+    if (payload.type === "vlm") {
+      handleVlm(payload);
+      return;
+    }
     if (payload.type === "status") {
       renderStatus(payload.status);
     }
@@ -421,6 +457,7 @@ function renderDemoViewer() {
     zoneEditToggle.disabled = true;
   }
   syncPanes(demoCameras);
+  renderVlmChannel({ enabled: true });
   state.zonesByCamera = { front: demoZones };
   renderZoneList();
   droppedMetric.textContent = "0";
@@ -441,6 +478,11 @@ function renderDemoViewer() {
     pane.empty.hidden = true;
     collectClasses(detection);
   }
+  const frontPane = state.panes.get("front");
+  if (frontPane) {
+    frontPane.vlm = demoVlm;
+  }
+  updateVlmCaption();
   state.lastCameraId = "front";
   renderMetrics(demoDetection);
   renderError("");
@@ -479,6 +521,7 @@ function renderFrameBytes(data) {
   if (!active || active === pane) {
     renderMetrics(frame.detection);
     renderError(frame.detection.error || "");
+    updateVlmCaption();
   }
 }
 
@@ -542,6 +585,7 @@ function renderStatus(status) {
   renderCameraLink(streams);
   renderPhoneStorage(streams.length === 1 ? streams[0] : status);
   renderModel(status.detector || {});
+  renderVlmChannel(status.vlm);
   droppedMetric.textContent = String(status.frames_dropped ?? "-");
   const recordings = status.recordings || {};
   const remote = status.remote_storage || {};
@@ -616,6 +660,52 @@ function notifyBrowser(event, pane) {
       .then((permission) => permission === "granted" && show())
       .catch(() => {});
   }
+}
+
+// Stash the newest VLM payload on its camera's pane. Drawn only while the VLM
+// channel is active; the box drawing loop reads pane.vlm via activeDetection().
+function handleVlm(payload) {
+  const pane = state.panes.get(payload.camera_id || "") || activePane();
+  if (!pane) {
+    return;
+  }
+  pane.vlm = payload;
+  updateVlmCaption();
+}
+
+// The scene caption bar tracks the active pane's latest VLM description, and
+// only while the VLM channel is showing. Called on new payloads and whenever
+// the active pane or channel changes.
+function updateVlmCaption() {
+  if (!vlmCaption) {
+    return;
+  }
+  const pane = activePane();
+  const text =
+    state.channel === "vlm" && pane && pane.vlm ? pane.vlm.description || "" : "";
+  vlmCaption.textContent = text;
+  vlmCaption.hidden = !text;
+}
+
+// Reveal the channel toggle once the server reports the VLM channel is on. When
+// it is off, force back to the YOLO channel so a stale toggle can't blank the
+// stage with an empty VLM overlay.
+function renderVlmChannel(vlm) {
+  const enabled = Boolean(vlm && vlm.enabled);
+  if (channelGroupControl) {
+    channelGroupControl.hidden = !enabled;
+  }
+  if (!enabled && state.channel !== "yolo") {
+    setChannel("yolo");
+  }
+}
+
+function setChannel(channel) {
+  state.channel = channel === "vlm" ? "vlm" : "yolo";
+  for (const button of channelButtons) {
+    button.setAttribute("aria-pressed", button.dataset.channel === state.channel ? "true" : "false");
+  }
+  updateVlmCaption();
 }
 
 function renderModel(detector) {
@@ -793,6 +883,13 @@ function drawOverlay() {
   requestAnimationFrame(drawOverlay);
 }
 
+// The detection the active channel draws. The YOLO channel uses the per-frame
+// tracked boxes; the VLM channel uses the periodic open-vocab payload. Both
+// carry width/height so the overlay letterboxes onto the same JPEG underlay.
+function activeDetection(pane) {
+  return state.channel === "vlm" ? pane.vlm : pane.detection;
+}
+
 function drawPane(pane) {
   resizeOverlay(pane);
   const ctx = pane.overlay.getContext("2d");
@@ -802,12 +899,17 @@ function drawPane(pane) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  const detection = pane.detection;
+  const yoloChannel = state.channel === "yolo";
+  const detection = activeDetection(pane);
   if (detection && detection.width > 0 && detection.height > 0) {
     const fit = fitContain(width, height, detection.width, detection.height);
-    drawZones(ctx, pane, detection, fit);
+    // Zones and the zone-drawing draft belong to the YOLO channel only (VLM
+    // has no confidence/tracking to feed them).
+    if (yoloChannel) {
+      drawZones(ctx, pane, detection, fit);
+    }
     drawBoxes(ctx, detection, fit);
-    if (soloPane() === pane) {
+    if (yoloChannel && soloPane() === pane) {
       drawDraft(ctx, detection, fit);
     }
   }
@@ -1162,6 +1264,10 @@ async function pollStatus() {
 
 for (const button of modeButtons) {
   button.addEventListener("click", () => setDetectMode(button.dataset.detectMode));
+}
+
+for (const button of channelButtons) {
+  button.addEventListener("click", () => setChannel(button.dataset.channel));
 }
 
 zoneEditToggle?.addEventListener("click", () => setEditor(!state.editor.active));

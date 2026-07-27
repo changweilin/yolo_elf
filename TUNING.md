@@ -234,6 +234,47 @@ $env:YOLO_CLASSES = "person,backpack,fire extinguisher"
 載入時會自動呼叫 `set_classes` 套用詞彙；`/api/status` 的 `open_vocabulary` 會顯示是否生效，
 `configured_classes` 顯示目前設定的類別。若 `YOLO_CLASSES` 指到的不是 world 模型，會自動忽略並沿用內建類別。
 
+## VLM 語意通道（Florence-2）
+
+需要「用自然語言描述沒見過的東西」或「讓機器說出畫面在發生什麼」時，可開啟選用的 **VLM 通道**。
+它是**加法式**的：跟 YOLO 並存、不取代——YOLO 仍逐格跑（信心 / 追蹤 / 歷史全開），VLM 只是多一條
+慢速通道，Viewer 上以「YOLO / VLM」分頁切換。
+
+```powershell
+$env:VLM_ENABLED = "1"
+$env:VLM_INTERVAL_SEC = "3"          # 每 3 秒掃一輪各相機
+$env:YOLO_CLASSES = "person,backpack,fire extinguisher"   # 有值→開放詞彙接地；留空→<OD> 內建詞彙
+.\scripts\run.ps1
+```
+
+先裝相依（Florence-2 的 `trust_remote_code` 會 import 這些）：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install "transformers>=4.44" "timm>=1.0" "einops>=0.8"
+```
+
+### 運作方式
+
+- 一個獨立的定時 worker 每 `VLM_INTERVAL_SEC` 秒取**各相機最新處理過的幀**（不跟 YOLO 搶就緒佇列），
+  跑一次 Florence-2，把結果以獨立的 `{"type":"vlm",...}` 訊息廣播給 Viewer。
+- **Phase 1 — 開放詞彙偵測框**。task token 由 `VLM_DETECT_TASK` 決定，留空時：有 `YOLO_CLASSES`
+  用 `<OPEN_VOCABULARY_DETECTION>`（依提示接地），否則 `<OD>`（模型內建詞彙）。
+- **Phase 2 — 場景描述**。`VLM_CAPTION=1`（預設）時每輪同時跑一次描述 task（`VLM_CAPTION_TASK`，
+  預設 `<MORE_DETAILED_CAPTION>`），文字隨 `vlm` 訊息附上，顯示在 Viewer VLM 分頁底部的 HUD 疊字。
+  描述是 best-effort：它失敗不會拖累框（框照出，錯誤記在 `/api/status` 的 `vlm.last_error`）。
+  只想要框、不要描述就設 `VLM_CAPTION=0`（省一次 generate）。
+- device / 半精度沿用 `YOLO_DEVICE` / `YOLO_HALF`；`/api/status` 的 `vlm` 區塊顯示 `loaded`、
+  `detect_task`、`caption_task`、`last_inference_ms`、`last_caption`、`last_load_error` 等。
+
+### 固有限制（不是實作取捨，是 Florence 的特性）
+
+- **沒有信心分數**：每個 VLM 框帶固定哨兵值 `1.0`，Viewer 的「最低信心」滑桿對 VLM 通道等於無效。
+- **沒有追蹤 / 歷史**：Florence 不吐 `track_id`，所以 VLM 框**不進 zones / alerts / history**；那些功能
+  只吃 YOLO 通道。要語意事件請搭配 YOLO 追蹤或 webhook。
+- **慢**：一張圖數百 ms～數秒。這就是它自成一條低頻通道、而非塞進逐格路徑的原因。純 CPU 請把
+  `VLM_INTERVAL_SEC` 調高。
+- `.engine` / `.onnx` 的加速 export 對 VLM 不適用（那條路徑只處理 YOLO 的 `.pt`）。
+
 ## 三種設定方式
 
 辨識參數（模式、模型、開放詞彙類別、信心門檻、影像尺寸）有三個入口，依「是否需要重啟」區分：

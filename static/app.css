@@ -232,6 +232,31 @@ input[type="range"] {
   display: none;
 }
 
+/* VLM scene caption: a centered bar over the bottom of the stage, shown only
+   while the VLM channel is active (visibility toggled from viewer.js). */
+.vlm-caption {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  max-width: min(680px, 82vw);
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+.vlm-caption[hidden] {
+  display: none;
+}
+
 #cameraVideo,
 .pane-image,
 #demoFrame {

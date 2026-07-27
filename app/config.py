@@ -151,6 +151,16 @@ class Settings:
     yolo_export: str
     yolo_warmup: bool
     yolo_warmup_runs: int
+    # Optional additive VLM (Florence-2) channel. Runs alongside — never replaces
+    # — the YOLO pipeline: a periodic worker samples each camera's latest frame
+    # and produces open-vocabulary boxes (Phase 1) and a scene caption (Phase 2).
+    # Device / half / prompt classes are shared with the YOLO detector.
+    vlm_enabled: bool
+    vlm_model: str
+    vlm_interval_sec: float
+    vlm_detect_task: str
+    vlm_caption: bool
+    vlm_caption_task: str
     conf_thresh: float
     img_size: int
     classifier_model: str
@@ -227,6 +237,22 @@ def get_settings() -> Settings:
         yolo_export=_choice_env("YOLO_EXPORT", "", ("", "engine", "onnx")),
         yolo_warmup=_bool_env("YOLO_WARMUP", False),
         yolo_warmup_runs=_bounded_int_env("YOLO_WARMUP_RUNS", 1, 1, 10),
+        # Additive VLM channel (off by default). When on, a Florence-2 engine runs
+        # a slow periodic pass in parallel with YOLO. It carries no confidence and
+        # no tracking (Florence emits neither), so it never feeds zones/alerts/
+        # history — it is a separate viewer channel. Device/half come from
+        # YOLO_DEVICE/YOLO_HALF; the open-vocab prompt comes from YOLO_CLASSES.
+        # VLM_DETECT_TASK overrides the Florence task token; empty auto-selects
+        # <OPEN_VOCABULARY_DETECTION> when YOLO_CLASSES is set, else <OD>.
+        vlm_enabled=_bool_env("VLM_ENABLED", False),
+        vlm_model=os.getenv("VLM_MODEL", "microsoft/Florence-2-base").strip()
+        or "microsoft/Florence-2-base",
+        vlm_interval_sec=_bounded_float_env("VLM_INTERVAL_SEC", 3.0, 0.5, 120.0),
+        vlm_detect_task=os.getenv("VLM_DETECT_TASK", "").strip(),
+        # Phase 2 scene caption. When on, each VLM tick also runs a caption task
+        # and ships the text on the same `vlm` payload for the viewer HUD.
+        vlm_caption=_bool_env("VLM_CAPTION", True),
+        vlm_caption_task=os.getenv("VLM_CAPTION_TASK", "").strip() or "<MORE_DETAILED_CAPTION>",
         conf_thresh=_bounded_float_env("CONF_THRESH", 0.2, 0.0, 1.0),
         img_size=_bounded_int_env("IMG_SIZE", 1280, 32, 4096),
         # Optional second-stage classifier (e.g. yolov8x-cls.pt, ImageNet 1000)

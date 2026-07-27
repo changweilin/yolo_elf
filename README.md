@@ -27,6 +27,7 @@
 - **多物件追蹤 / Multi-object tracking** — 內建 ByteTrack / BoT-SORT，跨影格為每個物件維持穩定 `track_id`，標籤以 `#id` 顯示、錄影中繼資料一併記錄；可 `YOLO_TRACK=0` 關閉。
 - **偵測歷史 / Detection history** — 以 `track_id` 為單位把每個物件聚合成一筆「出現紀錄」（首/末出現、停留秒數、經過的區域、最高信心），寫入本機 SQLite，`/history` 頁面可依類別 / 區域 / 時間範圍查詢。需 `YOLO_TRACK`（預設開），可 `EVENT_LOG_ENABLED=0` 關閉。
 - **開放詞彙偵測 / Open-vocabulary detection** — 支援 YOLO-World / YOLOE 模型，以文字提示（如 `person,backpack,fire extinguisher`）自訂偵測類別。
+- **VLM 語意通道 / VLM semantic channel** — 選用的 Florence-2 通道（`VLM_ENABLED=1`），與 YOLO **並存不取代**：慢速定時產生開放詞彙偵測框與場景描述，Viewer 以「YOLO / VLM」分頁切換。VLM 通道無信心分數與追蹤，故不進 zones / alerts / history；YOLO 通道維持全功能。詳見 `TUNING.md`。
 - **ROI 區域 / Region-of-interest zones** — 在 Viewer 直接框選多邊形區域，偵測框會標記所屬區域並即時顯示佔用數；告警規則可限定「只在某區域內」觸發。座標正規化（0–1），跟著畫面自動縮放，可經 `POST /api/zones` 即時增修。
 - **規則告警 / Rule-based alerts** — 依規則（類別、數量門檻、信心、區域）在偵測命中時觸發，帶冷卻時間去抖動；即時推送到 Viewer（含選用的瀏覽器通知）並可送出 webhook 串接外部系統。規則可經 `POST /api/alerts` 即時增修。
 - **第二階段分類器 / Second-stage classifier** — 選用的圖鑑模式：裁切每個偵測框並分類，為物件標註物種 / 細分類別。
@@ -224,6 +225,12 @@ Behaviour is driven by environment variables. The most common ones:
 | `YOLO_TRACKER` | `bytetrack.yaml` | 追蹤器設定。`bytetrack.yaml` 較輕量；`botsort.yaml` 加入 ReID 但成本較高。 |
 | `YOLO_EXPORT` | _(空 / empty)_ | 首次載入時把 `.pt` 自動 export 成加速格式並改載入產物：`engine`（TensorRT，需 GPU，綁定裝置 + 版本）或 `onnx`。產物快取於 `.pt` 同目錄；export 失敗會退回原 `.pt`（狀態顯示 `last_export_error`）。留空＝直接載入模型名稱（可為預先 export 的 `.engine`/`.onnx`）。 |
 | `YOLO_WARMUP` | `0` | 啟動時預熱偵測器。 |
+| `VLM_ENABLED` | `0` | 開啟**加法式 VLM 通道**（Florence-2）。與 YOLO 並存、不取代：一個慢速定時 worker 取各相機最新幀，產生開放詞彙偵測框（Phase 1）與場景描述（Phase 2），以獨立 `vlm` 訊息推給 Viewer，Viewer 以「YOLO / VLM」分頁切換。VLM 框沒有信心分數也沒有 `track_id`，故**不進 zones / alerts / history**。device/half 沿用 `YOLO_DEVICE`/`YOLO_HALF`，提示類別沿用 `YOLO_CLASSES`。留空＝關閉。需 `transformers`、`timm`、`einops`（見 `requirements.txt`）。 |
+| `VLM_MODEL` | `microsoft/Florence-2-base` | VLM 通道使用的 Florence-2 模型（HF repo id 或本機路徑）。首次載入以 `trust_remote_code` 自 Hugging Face 下載。`Florence-2-large` 較準但較慢。 |
+| `VLM_INTERVAL_SEC` | `3.0` | VLM 通道每一輪掃描各相機的間隔秒數（0.5–120）。Florence 一張圖需數百 ms～數秒，故刻意低頻；有 GPU 可調低，純 CPU 建議調高。 |
+| `VLM_DETECT_TASK` | _(空 / empty)_ | 覆寫 Florence 偵測 task token。留空＝自動：設了 `YOLO_CLASSES` 用 `<OPEN_VOCABULARY_DETECTION>`（依提示接地），否則 `<OD>`（內建詞彙）。 |
+| `VLM_CAPTION` | `1` | VLM 通道每輪同時產生**場景描述**（Phase 2），文字隨 `vlm` 訊息附上，顯示在 Viewer VLM 分頁底部的 HUD 疊字。設 `0` 只出框、不描述（省一次 generate、較快）。 |
+| `VLM_CAPTION_TASK` | `<MORE_DETAILED_CAPTION>` | 描述用的 Florence task token。可改 `<CAPTION>`（簡短）或 `<DETAILED_CAPTION>`（中等）。 |
 | `CONF_THRESH` | `0.2` | 偵測信心門檻。越低召回越高、誤判越多。 |
 | `IMG_SIZE` | `1280` | 偵測影像尺寸。越大對小 / 遠物件越有利但越慢。 |
 | `CLASSIFIER_MODEL` | _(空 / empty)_ | 選用的第二階段分類器（圖鑑模式），為每個偵測框內的物件命名物種。留空則僅偵測。可試 `yolov8x-cls.pt`（ImageNet 1000 類），首次使用自動下載。 |
