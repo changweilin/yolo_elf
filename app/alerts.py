@@ -28,7 +28,8 @@ class AlertRule:
     ``classes`` empty means "any label"; otherwise a box counts only when its
     detection label is in the set. ``min_confidence`` filters weak boxes before
     counting, ``min_count`` is how many matching boxes trigger the rule, and
-    ``cooldown_sec`` is the minimum gap between two fires of the same rule.
+    ``cooldown_sec`` is the minimum gap between two fires of the same rule on
+    the same camera. ``camera_id`` ``None`` means the rule watches every camera.
     """
 
     name: str
@@ -37,12 +38,16 @@ class AlertRule:
     min_confidence: float
     cooldown_sec: float
     zone: str | None
+    camera_id: str | None = None
 
     def matches_label(self, label: str) -> bool:
         return not self.classes or label in self.classes
 
     def matches_zone(self, box: dict[str, Any]) -> bool:
         return self.zone is None or self.zone in (box.get("zones") or [])
+
+    def matches_camera(self, camera_id: str | None) -> bool:
+        return self.camera_id is None or self.camera_id == camera_id
 
     def public(self) -> dict[str, Any]:
         return {
@@ -52,6 +57,7 @@ class AlertRule:
             "min_confidence": self.min_confidence,
             "cooldown_sec": self.cooldown_sec,
             "zone": self.zone,
+            "camera_id": self.camera_id,
         }
 
 
@@ -80,6 +86,8 @@ def _parse_rule(item: Any, index: int, default_cooldown: float) -> AlertRule:
     )
     zone_raw = item.get("zone")
     zone = str(zone_raw).strip() if zone_raw not in (None, "") else None
+    camera_raw = item.get("camera_id")
+    camera_id = str(camera_raw).strip() if camera_raw not in (None, "") else None
     return AlertRule(
         name=name,
         classes=classes,
@@ -87,6 +95,7 @@ def _parse_rule(item: Any, index: int, default_cooldown: float) -> AlertRule:
         min_confidence=min_confidence,
         cooldown_sec=cooldown_sec,
         zone=zone,
+        camera_id=camera_id,
     )
 
 
@@ -161,9 +170,11 @@ class AlertEngine:
         self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
         self._worker: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
-        # Cooldown bookkeeping keyed by rule name, using a monotonic clock so it
-        # is immune to wall-clock jumps.
-        self._last_fired_monotonic: dict[str, float] = {}
+        # Cooldown bookkeeping keyed by (camera_id, rule name), using a monotonic
+        # clock so it is immune to wall-clock jumps. The camera is part of the
+        # key because a rule firing on the front door must not silence the same
+        # rule watching the back yard.
+        self._last_fired_monotonic: dict[tuple[str | None, str], float] = {}
         self._recent: deque[dict[str, Any]] = deque(maxlen=MAX_RECENT_EVENTS)
         self.events_fired = 0
         self.webhook_sent = 0
@@ -191,7 +202,10 @@ class AlertEngine:
         self._worker = None
 
     async def process(
-        self, frame: CameraFrame, detection: dict[str, Any]
+        self,
+        frame: CameraFrame,
+        detection: dict[str, Any],
+        camera_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Evaluate one detection; return the alerts that fired this frame."""
         if not self._rules or detection.get("error"):
@@ -202,6 +216,8 @@ class AlertEngine:
         fired: list[dict[str, Any]] = []
         async with self._lock:
             for rule in self._rules:
+                if not rule.matches_camera(camera_id):
+                    continue
                 matches = [
                     box
                     for box in boxes
@@ -211,11 +227,12 @@ class AlertEngine:
                 ]
                 if len(matches) < rule.min_count:
                     continue
-                last = self._last_fired_monotonic.get(rule.name)
+                cooldown_key = (camera_id, rule.name)
+                last = self._last_fired_monotonic.get(cooldown_key)
                 if last is not None and (now - last) < rule.cooldown_sec:
                     continue
-                self._last_fired_monotonic[rule.name] = now
-                event = self._build_event(rule, matches, detection)
+                self._last_fired_monotonic[cooldown_key] = now
+                event = self._build_event(rule, matches, detection, camera_id)
                 self._recent.appendleft(event)
                 self.events_fired += 1
                 fired.append(event)
@@ -232,7 +249,7 @@ class AlertEngine:
             # Drop cooldown state for rules that no longer exist so a removed and
             # re-added rule doesn't inherit a stale cooldown.
             self._last_fired_monotonic = {
-                name: ts for name, ts in self._last_fired_monotonic.items() if name in names
+                key: ts for key, ts in self._last_fired_monotonic.items() if key[1] in names
             }
 
     async def drain(self) -> None:
@@ -256,7 +273,11 @@ class AlertEngine:
             }
 
     def _build_event(
-        self, rule: AlertRule, matches: list[dict[str, Any]], detection: dict[str, Any]
+        self,
+        rule: AlertRule,
+        matches: list[dict[str, Any]],
+        detection: dict[str, Any],
+        camera_id: str | None = None,
     ) -> dict[str, Any]:
         fired_at = time.time()
         detail = [
@@ -274,6 +295,7 @@ class AlertEngine:
             "type": "alert",
             "rule": rule.name,
             "zone": rule.zone,
+            "camera_id": camera_id,
             "count": len(matches),
             "frame_id": detection.get("frame_id"),
             "fired_at": fired_at,

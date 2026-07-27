@@ -23,11 +23,17 @@ from app.events import EventStore, SightingAggregator
 from app.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE, render_metrics
 from app.recordings import RecordingStore, recording_storage_mode
 from app.remote_storage import RemoteStorage
-from app.stream_state import CameraFrame, StreamHub
+from app.stream_state import StreamRegistry
+from app.vlm import VlmEngine
 from app.zones import ZoneEngine
 
+# Private close code (4000-4999 is reserved for applications) telling a client
+# its camera_id is not in the CAMERAS allowlist. Distinct from 1008, which the
+# pages treat as "session expired, go log in".
+UNKNOWN_CAMERA_CLOSE_CODE = 4404
 
-async def _apply_camera_text(hub: StreamHub, text: str) -> bool:
+
+async def _apply_camera_text(registry: StreamRegistry, camera_id: str, text: str) -> bool:
     """Handle a text frame from the phone. Returns True if it was a known message."""
     try:
         message = json.loads(text)
@@ -35,14 +41,17 @@ async def _apply_camera_text(hub: StreamHub, text: str) -> bool:
         return False
     if not isinstance(message, dict) or message.get("type") != "client_state":
         return False
-    await hub.set_camera_state(message.get("storage_mode"), message.get("recording"))
+    await registry.set_camera_state(
+        message.get("storage_mode"), message.get("recording"), camera_id
+    )
     return True
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
     detector = YoloDetector(resolved_settings)
-    hub = StreamHub(resolved_settings)
+    vlm_engine = VlmEngine(resolved_settings)
+    registry = StreamRegistry(resolved_settings)
     recording_store = RecordingStore(resolved_settings)
     remote_storage = RemoteStorage(resolved_settings)
     alert_engine = AlertEngine(resolved_settings)
@@ -52,29 +61,68 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     auth_guard = AuthGuard(resolved_settings)
 
     async def detection_worker() -> None:
+        # One worker for every camera: the GPU is the bottleneck, so streams are
+        # serialized here rather than each fighting for the device from its own
+        # thread. The registry's ready queue hands them out round-robin, and each
+        # camera's single-slot queue means a backlog is dropped, not queued.
         while True:
-            frame: CameraFrame = await hub.frame_queue.get()
+            camera_id, frame = await registry.next_frame()
             processing_started_at = time.time()
             try:
-                detection = await asyncio.to_thread(detector.detect, frame.jpeg, frame.frame_id)
+                detection = await asyncio.to_thread(
+                    detector.detect,
+                    frame.jpeg,
+                    frame.frame_id,
+                    registry.tracker_key(camera_id),
+                )
             except DetectionError as exc:
                 detection = detection_error_payload(frame.frame_id, str(exc))
             except Exception as exc:
                 detection = detection_error_payload(
                     frame.frame_id, f"Unexpected detector error: {exc}"
                 )
-            finally:
-                hub.frame_queue.task_done()
 
+            detection["camera_id"] = camera_id
             # Tag boxes with their ROI zones before anyone consumes the detection
             # so viewers, recordings and zone-scoped alert rules all agree.
-            zone_engine.annotate(detection)
-            sightings.observe(detection, time.time())
-            await hub.publish_detection(frame, detection, processing_started_at)
+            zone_engine.annotate(detection, camera_id)
+            sightings.observe(detection, time.time(), camera_id)
+            await registry.publish_detection(frame, detection, processing_started_at, camera_id)
             await remote_storage.submit(frame, detection)
-            events = await alert_engine.process(frame, detection)
+            events = await alert_engine.process(frame, detection, camera_id)
             if events:
-                await hub.broadcast_alert(events)
+                await registry.broadcast_alert(events)
+
+    async def vlm_worker() -> None:
+        # Additive VLM channel. On its own slow cadence it samples each camera's
+        # newest *processed* frame (registry.latest_frame) and broadcasts
+        # open-vocabulary boxes as a distinct `vlm` message. Decoupled from the
+        # per-frame detection worker so a slow Florence pass never blocks YOLO,
+        # and reading the retained frame means it never steals from the ready
+        # queue. Per-tick errors are recorded in vlm_engine.status() and skipped
+        # so a transient failure never tears the worker down.
+        interval = resolved_settings.vlm_interval_sec
+        while True:
+            await asyncio.sleep(interval)
+            for camera_id in registry.camera_ids:
+                frame = registry.latest_frame(camera_id)
+                if frame is None:
+                    continue
+                try:
+                    result = await asyncio.to_thread(vlm_engine.analyze, frame.jpeg)
+                except Exception:
+                    # VlmError (load/inference) is already recorded in
+                    # vlm_engine.status(); skip this tick and try next interval.
+                    continue
+                await registry.broadcast_vlm(
+                    camera_id,
+                    {
+                        "type": "vlm",
+                        "camera_id": camera_id,
+                        "frame_id": frame.frame_id,
+                        **result,
+                    },
+                )
 
     async def event_flush_worker() -> None:
         # Finalize and persist sightings whose track has gone quiet. Decoupled
@@ -85,20 +133,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             expired = sightings.take_expired(time.time(), resolved_settings.event_expiry_sec)
             await event_store.write(expired)
 
-    async def status_payload() -> dict[str, Any]:
-        status = await hub.snapshot(detector.status())
+    async def status_payload(camera_id: str | None = None) -> dict[str, Any]:
+        status = await registry.snapshot(detector.status())
         status["recordings"] = await recording_store.snapshot()
         status["remote_storage"] = await remote_storage.snapshot()
         status["alerts"] = await alert_engine.snapshot()
-        status["zones"] = zone_engine.snapshot()
+        status["zones"] = zone_engine.snapshot(camera_id)
         status["events"] = {**event_store.snapshot(), "active_sightings": sightings.active_count}
+        status["vlm"] = vlm_engine.status()
         return status
 
     @asynccontextmanager
     async def lifespan(api: FastAPI):
         api.state.settings = resolved_settings
         api.state.detector = detector
-        api.state.hub = hub
+        api.state.vlm_engine = vlm_engine
+        api.state.registry = registry
         api.state.recording_store = recording_store
         api.state.remote_storage = remote_storage
         api.state.alert_engine = alert_engine
@@ -116,6 +166,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if resolved_settings.event_log_enabled
             else None
         )
+        vlm_task = None
+        if resolved_settings.vlm_enabled:
+            # Load Florence-2 off the event loop so a slow first load never
+            # blocks startup; the worker tolerates it not being ready yet.
+            asyncio.create_task(asyncio.to_thread(vlm_engine.preload))
+            vlm_task = asyncio.create_task(vlm_worker())
         try:
             yield
         finally:
@@ -124,6 +180,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await worker
             except asyncio.CancelledError:
                 pass
+            if vlm_task is not None:
+                vlm_task.cancel()
+                try:
+                    await vlm_task
+                except asyncio.CancelledError:
+                    pass
             if flusher is not None:
                 flusher.cancel()
                 try:
@@ -145,6 +207,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def _is_auth_exempt(path: str) -> bool:
         return path in auth_exempt_paths or path.startswith("/static/")
+
+    def _resolve_camera(camera_id: str | None) -> str:
+        """Map an optional ``camera_id`` query param onto a configured camera."""
+        try:
+            return registry.resolve_camera_id(camera_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def _safe_next(target: str | None) -> str:
         # Local paths only, never a scheme/host, to avoid an open redirect.
@@ -253,8 +322,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @api.get("/api/status")
-    async def api_status() -> dict[str, Any]:
-        return await status_payload()
+    async def api_status(camera_id: str | None = None) -> dict[str, Any]:
+        return await status_payload(_resolve_camera(camera_id))
 
     @api.get("/metrics")
     async def metrics() -> PlainTextResponse:
@@ -328,15 +397,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         until: float | None = None,
         label: str | None = None,
         zone: str | None = None,
+        camera_id: str | None = None,
     ) -> dict[str, Any]:
         events = await event_store.query(
-            limit=limit, since=since, until=until, label=label, zone=zone
+            limit=limit,
+            since=since,
+            until=until,
+            label=label,
+            zone=zone,
+            camera_id=_resolve_camera(camera_id) if camera_id else None,
         )
         return {"type": "events", "events": events, "count": len(events)}
 
+    @api.get("/api/cameras")
+    async def api_cameras() -> dict[str, Any]:
+        status = await registry.snapshot()
+        return {
+            "type": "cameras",
+            "cameras": registry.public_cameras(),
+            "default_camera_id": registry.default_camera_id,
+            "multi_camera": registry.multi_camera,
+            "streams": status["cameras"],
+        }
+
     @api.get("/api/zones")
-    async def api_zones_get() -> dict[str, Any]:
-        return {"type": "zones", "zones": zone_engine.snapshot()}
+    async def api_zones_get(camera_id: str | None = None) -> dict[str, Any]:
+        return {"type": "zones", "zones": zone_engine.snapshot(_resolve_camera(camera_id))}
 
     @api.post("/api/zones")
     async def api_zones_set(request: Request) -> dict[str, Any]:
@@ -344,13 +430,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             body = await request.json()
         except Exception:
             body = None
-        # Accept either {"zones": [...]} or a bare [...] array.
+        # Accept either {"zones": [...]} or a bare [...] array. A camera_id in
+        # the body (or omitted, meaning the default camera) scopes the write, so
+        # editing the front door's polygons never clears the back yard's.
         zones = body.get("zones") if isinstance(body, dict) else body
+        camera_id = _resolve_camera(body.get("camera_id") if isinstance(body, dict) else None)
         try:
-            zone_engine.set_zones(zones)
+            zone_engine.set_zones(zones, camera_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"type": "zones", "zones": zone_engine.snapshot()}
+        return {"type": "zones", "zones": zone_engine.snapshot(camera_id)}
 
     @api.post("/api/recordings")
     async def api_recordings(request: Request) -> dict[str, Any]:
@@ -410,17 +499,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(path, media_type="application/json", filename=path.name)
 
     @api.websocket("/ws/camera")
-    async def camera_socket(websocket: WebSocket) -> None:
+    async def camera_socket(websocket: WebSocket, camera_id: str | None = None) -> None:
         # HTTP middleware never sees WS handshakes, so gate them here. The
         # browser sends the session cookie automatically on same-origin connects.
         if auth_guard.enabled and not auth_guard.websocket_ok(websocket):
             await websocket.close(code=1008)
             return
         await websocket.accept()
-        await hub.set_camera(websocket)
+        try:
+            # Accept first, then validate: a close before the handshake completes
+            # reaches the browser as an opaque 1006, so the recorder would never
+            # learn *why* it was rejected.
+            resolved_camera_id = registry.resolve_camera_id(camera_id)
+        except ValueError as exc:
+            await websocket.send_json(
+                {"type": "error", "message": str(exc), "retryable": False, "fatal": True}
+            )
+            await websocket.close(code=UNKNOWN_CAMERA_CLOSE_CODE)
+            return
+        channel = registry.channel(resolved_camera_id)
+        await registry.set_camera(websocket, resolved_camera_id)
         await websocket.send_json(
             {
                 "type": "config",
+                "camera_id": resolved_camera_id,
+                "display_name": channel.display_name,
+                "cameras": registry.public_cameras(),
                 "capture": {
                     "width": resolved_settings.capture_width,
                     "height": resolved_settings.capture_height,
@@ -444,38 +548,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     break
                 if message.get("bytes") is not None:
                     try:
-                        await hub.submit_frame(message["bytes"])
+                        await registry.submit_frame(message["bytes"], resolved_camera_id)
                     except ValueError as exc:
                         await websocket.send_json(
                             {"type": "error", "message": str(exc), "retryable": True}
                         )
                 elif message.get("text") is not None:
-                    if not await _apply_camera_text(hub, message["text"]):
+                    if not await _apply_camera_text(
+                        registry, resolved_camera_id, message["text"]
+                    ):
                         await websocket.send_json({"type": "pong"})
         except WebSocketDisconnect:
             pass
         finally:
-            await hub.clear_camera(websocket)
+            await registry.clear_camera(websocket, resolved_camera_id)
 
     @api.websocket("/ws/viewer")
-    async def viewer_socket(websocket: WebSocket) -> None:
+    async def viewer_socket(websocket: WebSocket, camera_id: str | None = None) -> None:
         if auth_guard.enabled and not auth_guard.websocket_ok(websocket):
             await websocket.close(code=1008)
             return
         await websocket.accept()
-        await hub.add_viewer(websocket)
-        await websocket.send_json({"type": "status", "status": await status_payload()})
-        if not await hub.send_latest_to_viewer(websocket):
-            await hub.remove_viewer(websocket)
+        try:
+            # No camera_id = watch every camera (the grid); a camera_id narrows
+            # the socket to that one stream so a focused viewer isn't paying for
+            # frames it will not draw.
+            subscription = registry.resolve_camera_id(camera_id) if camera_id else None
+        except ValueError as exc:
+            await websocket.send_json(
+                {"type": "error", "message": str(exc), "retryable": False, "fatal": True}
+            )
+            await websocket.close(code=UNKNOWN_CAMERA_CLOSE_CODE)
+            return
+        await registry.add_viewer(websocket, subscription)
+        await websocket.send_json(
+            {"type": "status", "status": await status_payload(subscription)}
+        )
+        if not await registry.send_latest_to_viewer(websocket):
+            await registry.remove_viewer(websocket)
             return
         try:
             while True:
                 await websocket.receive_text()
-                await websocket.send_json({"type": "status", "status": await status_payload()})
+                await websocket.send_json(
+                    {"type": "status", "status": await status_payload(subscription)}
+                )
         except WebSocketDisconnect:
             pass
         finally:
-            await hub.remove_viewer(websocket)
+            await registry.remove_viewer(websocket)
 
     return api
 

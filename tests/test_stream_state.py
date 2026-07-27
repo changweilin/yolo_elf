@@ -1,7 +1,7 @@
 import asyncio
 
 from app.config import get_settings
-from app.stream_state import StreamHub
+from app.stream_state import StreamRegistry
 
 
 class _FakeViewer:
@@ -18,7 +18,7 @@ class _FakeViewer:
 
 
 def test_broadcast_alert_sends_events_to_viewers():
-    hub = StreamHub(get_settings())
+    hub = StreamRegistry(get_settings())
     viewer = _FakeViewer()
     event = {"type": "alert", "rule": "person", "count": 2}
 
@@ -31,7 +31,7 @@ def test_broadcast_alert_sends_events_to_viewers():
 
 
 def test_broadcast_alert_drops_dead_viewer():
-    hub = StreamHub(get_settings())
+    hub = StreamRegistry(get_settings())
     viewer = _FakeViewer(fail=True)
 
     async def run():
@@ -43,7 +43,7 @@ def test_broadcast_alert_drops_dead_viewer():
 
 
 def test_broadcast_alert_noop_without_events():
-    hub = StreamHub(get_settings())
+    hub = StreamRegistry(get_settings())
     viewer = _FakeViewer()
 
     async def run():
@@ -52,3 +52,45 @@ def test_broadcast_alert_noop_without_events():
 
     asyncio.run(run())
     assert viewer.sent == []
+
+
+def test_broadcast_vlm_sends_and_retains_latest():
+    hub = StreamRegistry(get_settings())
+    viewer = _FakeViewer()
+    payload = {"type": "vlm", "camera_id": "default", "boxes": []}
+
+    async def run():
+        await hub.add_viewer(viewer)
+        await hub.broadcast_vlm("default", payload)
+
+    asyncio.run(run())
+    assert viewer.sent == [payload]
+    # Retained so a viewer joining later can be primed.
+    assert hub.channels["default"].latest_vlm == payload
+
+
+def test_broadcast_vlm_unknown_camera_is_noop():
+    hub = StreamRegistry(get_settings())
+    viewer = _FakeViewer()
+
+    async def run():
+        await hub.add_viewer(viewer)
+        await hub.broadcast_vlm("ghost", {"type": "vlm"})
+
+    asyncio.run(run())
+    assert viewer.sent == []
+
+
+def test_send_latest_primes_new_viewer_with_vlm():
+    hub = StreamRegistry(get_settings())
+    viewer = _FakeViewer()
+    payload = {"type": "vlm", "camera_id": "default", "boxes": []}
+
+    async def run():
+        hub.channels["default"].latest_vlm = payload
+        await hub.add_viewer(viewer)
+        await hub.send_latest_to_viewer(viewer)
+
+    asyncio.run(run())
+    # No frames yet, so the only thing primed is the retained VLM payload.
+    assert viewer.sent == [payload]

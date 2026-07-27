@@ -185,8 +185,80 @@ input[type="range"] {
   touch-action: none;
 }
 
+/* The viewer stage is a grid of camera panes; the column count is set inline by
+   viewer.js. One camera = one cell filling the stage, i.e. the original
+   full-bleed layout; extra cameras split it evenly. */
+.viewer-stage {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-auto-rows: 1fr;
+  gap: 0;
+}
+
+/* Focus mode: one pane takes the whole stage, the rest stay in the DOM (their
+   canvases and object URLs keep their state) but are not laid out. */
+.viewer-stage.is-focused .viewer-pane:not(.is-focused) {
+  display: none;
+}
+
+.viewer-pane {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  background: var(--stage-bg);
+}
+
+.viewer-stage[data-count="1"] .pane-label {
+  display: none;
+}
+
+.pane-label {
+  position: absolute;
+  z-index: 2;
+  left: 8px;
+  top: 8px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.pane-label[hidden] {
+  display: none;
+}
+
+/* VLM scene caption: a centered bar over the bottom of the stage, shown only
+   while the VLM channel is active (visibility toggled from viewer.js). */
+.vlm-caption {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  max-width: min(680px, 82vw);
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+.vlm-caption[hidden] {
+  display: none;
+}
+
 #cameraVideo,
-#viewerImage,
+.pane-image,
 #demoFrame {
   position: absolute;
   inset: 0;
@@ -201,7 +273,7 @@ input[type="range"] {
 }
 
 #overlayCanvas,
-#viewerOverlay {
+.pane-overlay {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -848,10 +920,15 @@ input[type="range"] {
   font-size: 13px;
 }
 
-.view-filter {
+.view-filter,
+.camera-bar {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
+}
+
+.camera-bar[hidden] {
+  display: none;
 }
 
 .view-filter-head {

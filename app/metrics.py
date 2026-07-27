@@ -42,6 +42,7 @@ def render_metrics(status: dict[str, Any]) -> str:
     alerts = status.get("alerts") or {}
     zones = status.get("zones") or {}
     events = status.get("events") or {}
+    cameras = status.get("cameras") or {}
 
     lines: list[str] = []
 
@@ -64,6 +65,19 @@ def render_metrics(status: dict[str, Any]) -> str:
         else:
             lines.append(f"{full} {rendered}")
 
+    def emit_per_camera(name: str, mtype: str, help_text: str, field: str) -> None:
+        """One series per camera under a single HELP/TYPE header.
+
+        Cardinality is bounded by CAMERAS (MAX_CAMERAS caps it), which is why a
+        camera label is safe here while per-object labels like track_id are not.
+        """
+        full = _PREFIX + name
+        lines.append(f"# HELP {full} {help_text}")
+        lines.append(f"# TYPE {full} {mtype}")
+        for camera_id, stream in cameras.items():
+            label = _escape_label(str(camera_id))
+            lines.append(f'{full}{{camera="{label}"}} {_format_value(_num(stream.get(field)))}')
+
     # Pipeline / stream
     emit("uptime_seconds", "gauge", "Seconds since the server started.", status.get("uptime_sec"))
     emit("camera_connected", "gauge", "1 if a recorder is currently streaming, else 0.", status.get("camera_connected"))
@@ -81,6 +95,30 @@ def render_metrics(status: dict[str, Any]) -> str:
     emit("avg_inference_ms", "gauge", "Average inference time since start (ms).", status.get("avg_inference_ms"))
     emit("avg_queue_latency_ms", "gauge", "Average queue wait since start (ms).", status.get("avg_queue_latency_ms"))
     emit("avg_total_latency_ms", "gauge", "Average end-to-end latency since start (ms).", status.get("avg_total_latency_ms"))
+
+    # Per-camera stream (the aggregate series above stay the server-wide roll-up)
+    emit("cameras", "gauge", "Cameras configured in the registry.", len(cameras))
+    emit_per_camera(
+        "camera_connected", "gauge", "1 if this camera has a recorder streaming.", "camera_connected"
+    )
+    emit_per_camera(
+        "camera_frames_received_total", "counter", "Frames received from this camera.", "frames_received"
+    )
+    emit_per_camera(
+        "camera_frames_processed_total", "counter", "Frames of this camera run through detection.", "frames_processed"
+    )
+    emit_per_camera(
+        "camera_frames_dropped_total", "counter", "Frames of this camera dropped by its single-slot queue.", "frames_dropped"
+    )
+    emit_per_camera(
+        "camera_process_fps", "gauge", "Frames processed per second for this camera (lifetime average).", "process_fps"
+    )
+    emit_per_camera(
+        "camera_inference_ms", "gauge", "Inference time of this camera's most recent frame (ms).", "last_inference_ms"
+    )
+    emit_per_camera(
+        "camera_total_latency_ms", "gauge", "End-to-end latency of this camera's most recent frame (ms).", "last_total_latency_ms"
+    )
 
     # Detector
     emit("detector_loaded", "gauge", "1 if the detection model is loaded, else 0.", detector.get("loaded"))
@@ -116,8 +154,17 @@ def render_metrics(status: dict[str, Any]) -> str:
     emit("alert_webhook_sent_total", "counter", "Alert webhooks delivered.", alerts.get("webhook_sent"))
     emit("alert_webhook_failed_total", "counter", "Alert webhook deliveries that failed.", alerts.get("webhook_failed"))
 
-    # Zones
-    emit("zones", "gauge", "Configured ROI zones.", len(zones.get("zones") or []))
+    # Zones. Zones are per-camera, so count every camera's polygons here — the
+    # snapshot's flat `zones` list is only the requested (default) camera.
+    zones_by_camera = zones.get("cameras") or {}
+    emit(
+        "zones",
+        "gauge",
+        "Configured ROI zones across every camera.",
+        sum(len(items or []) for items in zones_by_camera.values())
+        if zones_by_camera
+        else len(zones.get("zones") or []),
+    )
 
     # Events / sightings
     emit("sightings_written_total", "counter", "Sighting rows persisted to the event store.", events.get("sightings_written"))

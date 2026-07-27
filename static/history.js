@@ -3,12 +3,17 @@ const stateChip = document.querySelector("#historyState");
 const errorLine = document.querySelector("#historyError");
 const labelFilter = document.querySelector("#labelFilter");
 const zoneFilter = document.querySelector("#zoneFilter");
+const cameraFilter = document.querySelector("#cameraFilter");
+const cameraFilterField = document.querySelector("#cameraFilterField");
+const cameraColumnHead = document.querySelector("#cameraColumnHead");
 const rangeButtons = Array.from(document.querySelectorAll("[data-range]"));
 const rows = document.querySelector("#historyRows");
 const emptyHint = document.querySelector("#historyEmpty");
 
 // Default window: the last hour. 0 means "all time" (no lower bound).
-const state = { rangeSec: 3600 };
+// `cameras` maps camera_id -> display name; the filter and the extra table
+// column only appear once the server actually reports more than one camera.
+const state = { rangeSec: 3600, cameras: {}, multiCamera: false };
 
 function setChip(text, tone) {
   stateChip.textContent = text;
@@ -49,7 +54,55 @@ function buildQuery() {
   if (zone) {
     params.set("zone", zone);
   }
+  const camera = cameraFilter?.value.trim();
+  if (camera) {
+    params.set("camera_id", camera);
+  }
   return params.toString();
+}
+
+async function loadCameras() {
+  try {
+    const response = await fetch("/api/cameras", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    state.multiCamera = payload.multi_camera === true;
+    state.cameras = Object.fromEntries(
+      (payload.cameras || []).map((camera) => [camera.camera_id, camera.display_name]),
+    );
+  } catch {
+    // Single-camera fallback: leave the filter hidden.
+  }
+  renderCameraFilter();
+}
+
+function renderCameraFilter() {
+  if (cameraColumnHead) {
+    cameraColumnHead.hidden = !state.multiCamera;
+  }
+  if (!cameraFilter || !cameraFilterField) {
+    return;
+  }
+  cameraFilterField.hidden = !state.multiCamera;
+  if (!state.multiCamera) {
+    return;
+  }
+  const current = cameraFilter.value;
+  cameraFilter.textContent = "";
+  cameraFilter.append(new Option("全部相機", ""));
+  for (const [id, name] of Object.entries(state.cameras)) {
+    cameraFilter.append(new Option(name === id ? id : `${name} (${id})`, id));
+  }
+  cameraFilter.value = current;
+}
+
+function cameraLabel(id) {
+  if (!id) {
+    return "—";
+  }
+  return state.cameras[id] || id;
 }
 
 function renderRows(events) {
@@ -58,6 +111,9 @@ function renderRows(events) {
   for (const event of events) {
     const tr = document.createElement("tr");
     appendCell(tr, formatTime(event.first_seen));
+    if (state.multiCamera) {
+      appendCell(tr, cameraLabel(event.camera_id));
+    }
     appendCell(tr, event.label || "—");
     appendCell(tr, event.track_id != null ? `#${event.track_id}` : "—");
     appendCell(tr, (event.zones || []).join(", ") || "—");
@@ -104,5 +160,7 @@ filters.addEventListener("submit", (event) => {
   loadHistory();
 });
 
+cameraFilter?.addEventListener("change", loadHistory);
+
 renderRange();
-loadHistory();
+void loadCameras().then(loadHistory);

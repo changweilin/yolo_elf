@@ -27,6 +27,7 @@ const zoomValue = document.querySelector("#zoomValue");
 const shutterInput = document.querySelector("#shutterInput");
 const isoInput = document.querySelector("#isoInput");
 const cameraStatus = document.querySelector("#cameraStatus");
+const cameraIdStatus = document.querySelector("#cameraIdStatus");
 const socketStatus = document.querySelector("#socketStatus");
 const computeStatus = document.querySelector("#computeStatus");
 const detectStatus = document.querySelector("#detectStatus");
@@ -64,6 +65,11 @@ const moduleUrl = new URL(import.meta.url);
 const demoMode =
   window.YOLO_ELF_DEMO_MODE === true || moduleUrl.searchParams.get("demo") === "1";
 
+// Which camera this recorder registers as. Read from the page URL (not the
+// module URL) so one build serves every camera: /recorder?camera_id=front. The
+// server rejects anything outside its CAMERAS allowlist.
+const cameraId = new URLSearchParams(window.location.search).get("camera_id") || "";
+
 const MAX_BUFFERED_BYTES = 2_000_000;
 const SOFT_BUFFERED_BYTES = 750_000;
 const SEND_WINDOW_MS = 3000;
@@ -92,6 +98,9 @@ const state = {
   sending: false,
   liveActive: false,
   startingStream: false,
+  // Set when the server rejects this recorder's camera_id — retrying would just
+  // be rejected again, so the reconnect loop stays off until the URL changes.
+  cameraRejected: false,
   config: {
     width: 1920,
     height: 1080,
@@ -1494,8 +1503,24 @@ function sendClientState() {
   }
 }
 
+function cameraSocketPath() {
+  return cameraId ? `/ws/camera?camera_id=${encodeURIComponent(cameraId)}` : "/ws/camera";
+}
+
+function renderCameraIdentity(id, displayName) {
+  if (!cameraIdStatus) {
+    return;
+  }
+  if (!id) {
+    cameraIdStatus.hidden = true;
+    return;
+  }
+  cameraIdStatus.hidden = false;
+  setChip(cameraIdStatus, displayName && displayName !== id ? `${displayName} · ${id}` : id, "good");
+}
+
 function connectSocket() {
-  if (!hasFrameSource() || !detectionTransportActive()) {
+  if (!hasFrameSource() || !detectionTransportActive() || state.cameraRejected) {
     return;
   }
   if (state.ws && state.ws.readyState <= WebSocket.OPEN) {
@@ -1503,7 +1528,7 @@ function connectSocket() {
   }
 
   setChip(socketStatus, "socket connecting", "warn");
-  const ws = new WebSocket(socketUrl("/ws/camera"));
+  const ws = new WebSocket(socketUrl(cameraSocketPath()));
   ws.binaryType = "arraybuffer";
   state.ws = ws;
 
@@ -1518,6 +1543,7 @@ function connectSocket() {
       applyServerConfig(payload.capture);
       applyRecordingConfig(payload.recording);
       applyDetectorStatus(payload.detector);
+      renderCameraIdentity(payload.camera_id, payload.display_name);
       return;
     }
     if (payload.type === "detection") {
@@ -1535,6 +1561,15 @@ function connectSocket() {
     }
     if (payload.type === "error") {
       setChip(detectStatus, payload.message, "bad");
+      if (payload.fatal) {
+        // Unknown camera_id: the URL is wrong, so reconnecting cannot help.
+        state.cameraRejected = true;
+        setChip(socketStatus, "camera id rejected", "bad");
+        if (cameraIdStatus) {
+          cameraIdStatus.hidden = false;
+          setChip(cameraIdStatus, `${cameraId || "?"} 未授權`, "bad");
+        }
+      }
     }
   });
 
@@ -1546,6 +1581,9 @@ function connectSocket() {
     // 1008 = server rejected an unauthenticated WS; go re-authenticate.
     if (event.code === 1008) {
       redirectToLogin();
+      return;
+    }
+    if (state.cameraRejected) {
       return;
     }
     if (hasFrameSource() && detectionTransportActive()) {
@@ -2036,6 +2074,7 @@ if (cameraStage) {
   cameraStage.addEventListener("pointercancel", handleStagePointerUp);
 }
 window.addEventListener("resize", resizeOverlay);
+renderCameraIdentity(cameraId, "");
 restoreStorageModePreference();
 setSettingsExpanded(state.ui.settingsExpanded);
 syncCameraControls();

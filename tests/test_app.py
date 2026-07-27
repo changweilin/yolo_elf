@@ -36,6 +36,8 @@ REMOTE_ENV = [
     "METRICS_ENABLED",
     "AUTH_TOKEN",
     "AUTH_SESSION_TTL",
+    "CAMERAS",
+    "MAX_CAMERAS",
 ]
 
 
@@ -96,7 +98,7 @@ def test_phone_page_exposes_camera_toggle_action():
     assert 'id="modeGroup"' in response.text
     assert 'data-detect-mode="fast"' in response.text
     assert 'data-detect-mode="accurate"' in response.text
-    assert "/static/phone.js?v=file-detect-2" in response.text
+    assert "/static/phone.js?v=multicam-1" in response.text
     assert "data-start-camera" not in response.text
     assert 'id="stopButton"' not in response.text
 
@@ -490,6 +492,192 @@ def test_camera_client_state_is_reflected_in_status():
             assert status["camera_connected"] is True
             assert status["camera_storage_mode"] == "both"
             assert status["camera_recording"] is True
+
+
+def test_status_is_single_camera_by_default():
+    app = create_app()
+    with TestClient(app) as client:
+        status = client.get("/api/status").json()
+
+    assert status["multi_camera"] is False
+    assert status["camera_ids"] == ["default"]
+    assert status["default_camera_id"] == "default"
+    assert status["cameras"]["default"]["frames_received"] == 0
+
+
+def test_cameras_endpoint_lists_the_allowlist(monkeypatch):
+    monkeypatch.setenv("CAMERAS", "front:前門,back:後院")
+    app = create_app()
+    with TestClient(app) as client:
+        payload = client.get("/api/cameras").json()
+
+    assert payload["type"] == "cameras"
+    assert payload["multi_camera"] is True
+    assert payload["default_camera_id"] == "front"
+    assert payload["cameras"] == [
+        {"camera_id": "front", "display_name": "前門"},
+        {"camera_id": "back", "display_name": "後院"},
+    ]
+    assert set(payload["streams"]) == {"front", "back"}
+
+
+def test_two_cameras_stream_independently(monkeypatch):
+    monkeypatch.setenv("CAMERAS", "front,back")
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/camera?camera_id=front") as front:
+            assert front.receive_json()["camera_id"] == "front"
+            with client.websocket_connect("/ws/camera?camera_id=back") as back:
+                assert back.receive_json()["camera_id"] == "back"
+                front.send_bytes(b"not a jpeg")
+                assert front.receive_json()["type"] == "detection"
+                back.send_bytes(b"not a jpeg")
+                assert back.receive_json()["type"] == "detection"
+
+                status = client.get("/api/status").json()
+
+    assert status["cameras"]["front"]["camera_connected"] is True
+    assert status["cameras"]["back"]["camera_connected"] is True
+    # Each stream counts its own frames; the top level is the roll-up.
+    assert status["cameras"]["front"]["frames_processed"] == 1
+    assert status["cameras"]["back"]["frames_processed"] == 1
+    assert status["frames_processed"] == 2
+
+
+def test_camera_websocket_rejects_an_unlisted_camera_id(monkeypatch):
+    monkeypatch.setenv("CAMERAS", "front,back")
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/camera?camera_id=garage") as websocket:
+            message = websocket.receive_json()
+
+    assert message["type"] == "error"
+    assert message["fatal"] is True
+    assert "garage" in message["message"]
+
+
+def test_viewer_can_subscribe_to_one_camera(monkeypatch):
+    monkeypatch.setenv("CAMERAS", "front,back")
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/viewer?camera_id=back") as viewer:
+            assert viewer.receive_json()["type"] == "status"
+            with client.websocket_connect("/ws/camera?camera_id=front") as front:
+                front.receive_json()
+                front.send_bytes(b"not a jpeg")
+                assert front.receive_json()["type"] == "detection"
+            with client.websocket_connect("/ws/camera?camera_id=back") as back:
+                back.receive_json()
+                back.send_bytes(b"not a jpeg")
+                assert back.receive_json()["type"] == "detection"
+                # The front frame was never forwarded, so the first thing this
+                # viewer sees is the back camera's frame.
+                metadata = viewer.receive_json()
+                viewer.receive_bytes()
+
+    assert metadata["type"] == "frame"
+    assert metadata["camera_id"] == "back"
+
+
+def test_viewer_frames_carry_their_camera_id():
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/viewer") as viewer:
+            viewer.receive_json()
+            with client.websocket_connect("/ws/camera") as camera:
+                camera.receive_json()
+                camera.send_bytes(b"not a jpeg")
+                camera.receive_json()
+                metadata = viewer.receive_json()
+                viewer.receive_bytes()
+
+    assert metadata["camera_id"] == "default"
+    assert metadata["display_name"] == "Camera"
+
+
+def test_zones_are_stored_per_camera(monkeypatch):
+    monkeypatch.setenv("CAMERAS", "front,back")
+    app = create_app()
+    triangle = [[0.1, 0.1], [0.4, 0.1], [0.4, 0.6]]
+    with TestClient(app) as client:
+        client.post("/api/zones", json={"camera_id": "front", "zones": [{"name": "door", "points": triangle}]})
+        client.post("/api/zones", json={"camera_id": "back", "zones": [{"name": "yard", "points": triangle}]})
+
+        back = client.get("/api/zones?camera_id=back").json()["zones"]
+        front = client.get("/api/zones?camera_id=front").json()["zones"]
+
+    assert [zone["name"] for zone in back["zones"]] == ["yard"]
+    assert [zone["name"] for zone in front["zones"]] == ["door"]
+    assert set(front["cameras"]) == {"front", "back"}
+
+
+def test_unknown_camera_id_is_a_bad_request(monkeypatch):
+    monkeypatch.setenv("CAMERAS", "front,back")
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/api/zones?camera_id=garage")
+
+    assert response.status_code == 400
+    assert "garage" in response.json()["detail"]
+
+
+def test_events_can_be_filtered_by_camera(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAMERAS", "front,back")
+    monkeypatch.setenv("EVENT_LOG_ENABLED", "1")
+    monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
+    app = create_app()
+    with TestClient(app) as client:
+        store = app.state.event_store
+
+        async def seed():
+            await store.write(
+                [
+                    {"camera_id": "front", "track_id": 1, "label": "person",
+                     "first_seen": 1000.0, "last_seen": 1006.0, "frames": 20,
+                     "max_confidence": 0.88, "zones": []},
+                    {"camera_id": "back", "track_id": 1, "label": "dog",
+                     "first_seen": 1000.0, "last_seen": 1006.0, "frames": 20,
+                     "max_confidence": 0.77, "zones": []},
+                ]
+            )
+
+        asyncio.run(seed())
+        scoped = client.get("/api/events?camera_id=back").json()
+        everything = client.get("/api/events").json()
+
+    assert scoped["count"] == 1
+    assert scoped["events"][0]["label"] == "dog"
+    assert everything["count"] == 2
+
+
+def test_metrics_expose_per_camera_series(monkeypatch):
+    monkeypatch.setenv("CAMERAS", "front,back")
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/metrics").text
+
+    assert "yolo_elf_cameras 2" in body
+    assert '# TYPE yolo_elf_camera_frames_received_total counter' in body
+    assert 'yolo_elf_camera_frames_received_total{camera="front"} 0' in body
+    assert 'yolo_elf_camera_frames_received_total{camera="back"} 0' in body
+
+
+def test_viewer_page_exposes_camera_grid():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/viewer")
+
+    assert 'id="viewerStage"' in response.text
+    assert 'id="viewerPanePrimary"' in response.text
+    assert 'id="cameraTabs"' in response.text
+
+
+def test_history_page_exposes_camera_filter():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/history")
+
+    assert 'id="cameraFilter"' in response.text
 
 
 def test_remote_mode_keeps_local_copy_by_default(tmp_path, monkeypatch):
