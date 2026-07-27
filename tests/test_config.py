@@ -16,6 +16,12 @@ SETTINGS_ENV = [
     "YOLO_EXPORT",
     "YOLO_WARMUP",
     "YOLO_WARMUP_RUNS",
+    "VLM_ENABLED",
+    "VLM_MODEL",
+    "VLM_INTERVAL_SEC",
+    "VLM_DETECT_TASK",
+    "VLM_CAPTION",
+    "VLM_CAPTION_TASK",
     "CONF_THRESH",
     "IMG_SIZE",
     "CLASSIFIER_MODEL",
@@ -58,6 +64,13 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
     assert settings.yolo_track is True
     assert settings.yolo_tracker == "bytetrack.yaml"
     assert settings.yolo_export == ""
+    # The VLM channel is opt-in and off by default.
+    assert settings.vlm_enabled is False
+    assert settings.vlm_model == "microsoft/Florence-2-base"
+    assert settings.vlm_interval_sec == 3.0
+    assert settings.vlm_detect_task == ""
+    assert settings.vlm_caption is True
+    assert settings.vlm_caption_task == "<MORE_DETAILED_CAPTION>"
     assert settings.conf_thresh == 0.2
     assert settings.img_size == 1280
     assert settings.classifier_model == ""
@@ -70,6 +83,39 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
     assert settings.recording_keep_local_copy is True
     assert settings.recording_storage_dir.name == "recordings"
     assert settings.recording_max_bytes == 250 * 1024 * 1024
+
+
+def test_vlm_env_overrides_are_parsed(monkeypatch):
+    clear_settings_env(monkeypatch)
+    monkeypatch.setenv("VLM_ENABLED", "1")
+    monkeypatch.setenv("VLM_MODEL", "microsoft/Florence-2-large")
+    monkeypatch.setenv("VLM_INTERVAL_SEC", "1.5")
+    monkeypatch.setenv("VLM_DETECT_TASK", "<OD>")
+
+    settings = get_settings()
+
+    assert settings.vlm_enabled is True
+    assert settings.vlm_model == "microsoft/Florence-2-large"
+    assert settings.vlm_interval_sec == 1.5
+    assert settings.vlm_detect_task == "<OD>"
+
+
+def test_vlm_caption_can_be_disabled(monkeypatch):
+    clear_settings_env(monkeypatch)
+    monkeypatch.setenv("VLM_CAPTION", "0")
+    monkeypatch.setenv("VLM_CAPTION_TASK", "<CAPTION>")
+
+    settings = get_settings()
+
+    assert settings.vlm_caption is False
+    assert settings.vlm_caption_task == "<CAPTION>"
+
+
+def test_vlm_interval_out_of_range_raises(monkeypatch):
+    clear_settings_env(monkeypatch)
+    monkeypatch.setenv("VLM_INTERVAL_SEC", "0.1")
+    with pytest.raises(ValueError):
+        get_settings()
 
 
 def test_get_settings_accepts_valid_overrides(monkeypatch):

@@ -48,6 +48,10 @@ class StreamChannel:
         self.last_error: str | None = None
         self.latest_detection: dict[str, Any] | None = None
         self.latest_frame: CameraFrame | None = None
+        # Newest VLM channel payload (open-vocab boxes + optional caption),
+        # retained so a viewer joining mid-stream can be primed. The VLM worker
+        # writes it via broadcast_vlm; it never touches the YOLO frame path.
+        self.latest_vlm: dict[str, Any] | None = None
 
     def snapshot(self, uptime_sec: float) -> dict[str, Any]:
         processed_count = self.frames_processed
@@ -117,6 +121,15 @@ class StreamRegistry:
 
     def channel(self, camera_id: str | None = None) -> StreamChannel:
         return self.channels[self.resolve_camera_id(camera_id)]
+
+    def latest_frame(self, camera_id: str) -> CameraFrame | None:
+        """The newest processed frame for a camera, or ``None`` if none yet.
+
+        The VLM worker samples this instead of pulling from the ready queue, so
+        the slow VLM pass never competes with YOLO for live frames.
+        """
+        channel = self.channels.get(camera_id)
+        return channel.latest_frame if channel else None
 
     def tracker_key(self, camera_id: str) -> str | None:
         """The detector's tracker slot for a camera.
@@ -286,6 +299,22 @@ class StreamRegistry:
                 if not await self._safe_send_json(viewer, event):
                     await self.remove_viewer(viewer)
 
+    async def broadcast_vlm(self, camera_id: str, payload: dict[str, Any]) -> None:
+        """Publish a VLM channel result (out of band from frames) to viewers.
+
+        Retains the payload as the camera's ``latest_vlm`` so a viewer joining
+        later can be primed, then fans it out to everyone watching this camera.
+        """
+        channel = self.channels.get(camera_id)
+        if channel is None:
+            return
+        async with self._lock:
+            channel.latest_vlm = payload
+            viewers = self._subscribed_viewers(camera_id)
+        for viewer in viewers:
+            if not await self._safe_send_json(viewer, payload):
+                await self.remove_viewer(viewer)
+
     def _subscribed_viewers(self, camera_id: str | None) -> list[WebSocket]:
         """Viewers watching ``camera_id`` (or watching everything). Lock held."""
         return [
@@ -314,7 +343,8 @@ class StreamRegistry:
             }
 
     async def send_latest_to_viewer(self, websocket: WebSocket) -> bool:
-        """Prime a freshly-connected viewer with the newest frame per camera."""
+        """Prime a freshly-connected viewer with the newest frame per camera
+        (plus the latest VLM payload) so both channels paint without waiting."""
         async with self._lock:
             subscription = self.viewer_clients.get(websocket)
             pending = [
@@ -322,10 +352,19 @@ class StreamRegistry:
                 for channel in self.channels.values()
                 if subscription is None or subscription == channel.camera_id
             ]
+            vlm_pending = [
+                channel.latest_vlm
+                for channel in self.channels.values()
+                if (subscription is None or subscription == channel.camera_id)
+                and channel.latest_vlm is not None
+            ]
         for channel, frame, detection in pending:
             if frame is None or detection is None:
                 continue
             if not await self._safe_send_viewer_frame(websocket, channel, frame, detection):
+                return False
+        for payload in vlm_pending:
+            if not await self._safe_send_json(websocket, payload):
                 return False
         return True
 

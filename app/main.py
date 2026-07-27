@@ -24,6 +24,7 @@ from app.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE, render_metrics
 from app.recordings import RecordingStore, recording_storage_mode
 from app.remote_storage import RemoteStorage
 from app.stream_state import StreamRegistry
+from app.vlm import VlmEngine
 from app.zones import ZoneEngine
 
 # Private close code (4000-4999 is reserved for applications) telling a client
@@ -49,6 +50,7 @@ async def _apply_camera_text(registry: StreamRegistry, camera_id: str, text: str
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
     detector = YoloDetector(resolved_settings)
+    vlm_engine = VlmEngine(resolved_settings)
     registry = StreamRegistry(resolved_settings)
     recording_store = RecordingStore(resolved_settings)
     remote_storage = RemoteStorage(resolved_settings)
@@ -91,6 +93,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if events:
                 await registry.broadcast_alert(events)
 
+    async def vlm_worker() -> None:
+        # Additive VLM channel. On its own slow cadence it samples each camera's
+        # newest *processed* frame (registry.latest_frame) and broadcasts
+        # open-vocabulary boxes as a distinct `vlm` message. Decoupled from the
+        # per-frame detection worker so a slow Florence pass never blocks YOLO,
+        # and reading the retained frame means it never steals from the ready
+        # queue. Per-tick errors are recorded in vlm_engine.status() and skipped
+        # so a transient failure never tears the worker down.
+        interval = resolved_settings.vlm_interval_sec
+        while True:
+            await asyncio.sleep(interval)
+            for camera_id in registry.camera_ids:
+                frame = registry.latest_frame(camera_id)
+                if frame is None:
+                    continue
+                try:
+                    result = await asyncio.to_thread(vlm_engine.analyze, frame.jpeg)
+                except Exception:
+                    # VlmError (load/inference) is already recorded in
+                    # vlm_engine.status(); skip this tick and try next interval.
+                    continue
+                await registry.broadcast_vlm(
+                    camera_id,
+                    {
+                        "type": "vlm",
+                        "camera_id": camera_id,
+                        "frame_id": frame.frame_id,
+                        **result,
+                    },
+                )
+
     async def event_flush_worker() -> None:
         # Finalize and persist sightings whose track has gone quiet. Decoupled
         # from the frame rate so SQLite writes stay infrequent and batched.
@@ -107,12 +140,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status["alerts"] = await alert_engine.snapshot()
         status["zones"] = zone_engine.snapshot(camera_id)
         status["events"] = {**event_store.snapshot(), "active_sightings": sightings.active_count}
+        status["vlm"] = vlm_engine.status()
         return status
 
     @asynccontextmanager
     async def lifespan(api: FastAPI):
         api.state.settings = resolved_settings
         api.state.detector = detector
+        api.state.vlm_engine = vlm_engine
         api.state.registry = registry
         api.state.recording_store = recording_store
         api.state.remote_storage = remote_storage
@@ -131,6 +166,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if resolved_settings.event_log_enabled
             else None
         )
+        vlm_task = None
+        if resolved_settings.vlm_enabled:
+            # Load Florence-2 off the event loop so a slow first load never
+            # blocks startup; the worker tolerates it not being ready yet.
+            asyncio.create_task(asyncio.to_thread(vlm_engine.preload))
+            vlm_task = asyncio.create_task(vlm_worker())
         try:
             yield
         finally:
@@ -139,6 +180,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await worker
             except asyncio.CancelledError:
                 pass
+            if vlm_task is not None:
+                vlm_task.cancel()
+                try:
+                    await vlm_task
+                except asyncio.CancelledError:
+                    pass
             if flusher is not None:
                 flusher.cancel()
                 try:

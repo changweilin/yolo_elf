@@ -6,7 +6,7 @@
     <title>YOLO Elf Viewer</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="/static/app.css?v=ui-6" />
+    <link rel="stylesheet" href="/static/app.css?v=ui-7" />
   </head>
   <body>
     <main class="viewer-shell">
@@ -20,6 +20,10 @@
           <span class="pane-label" hidden></span>
         </div>
       </section>
+
+      <!-- VLM scene caption. Shown only on the VLM channel; text comes from the
+           active camera's latest `vlm` payload (description). -->
+      <div id="vlmCaption" class="vlm-caption" hidden></div>
 
       <header class="hud topbar">
         <div class="brand"><img src="/static/logo.svg" alt="YOLO Elf" /></div>
@@ -91,6 +95,13 @@
             <button type="button" data-detect-mode="accurate" aria-pressed="false" title="精準辨識（較大模型，準確優先）">精準</button>
           </div>
         </div>
+        <div id="channelGroupControl" class="panel-control" hidden>
+          <span class="panel-control-label">通道</span>
+          <div id="channelGroup" class="segmented-control" role="group" aria-label="偵測通道">
+            <button type="button" data-channel="yolo" aria-pressed="true" title="YOLO：精準框、追蹤、歷史">YOLO</button>
+            <button type="button" data-channel="vlm" aria-pressed="false" title="VLM：開放詞彙框、場景描述（較慢）">VLM</button>
+          </div>
+        </div>
         <div id="modelSwitchProgress" class="switch-progress" role="status" aria-live="polite">
           <span class="switch-label">切換模型中…</span>
           <div class="progress-track"><div id="modelSwitchFill" class="progress-fill"></div></div>
@@ -156,6 +167,6 @@
         <div id="errorLine" class="error-line" hidden></div>
       </aside>
     </main>
-    <script type="module" src="/static/viewer.js?v=multicam-1"></script>
+    <script type="module" src="/static/viewer.js?v=vlm-2"></script>
   </body>
 </html>
