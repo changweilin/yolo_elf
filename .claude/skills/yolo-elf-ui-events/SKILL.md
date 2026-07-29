@@ -13,7 +13,8 @@ Maintain the live phone-to-viewer interaction loop. UI changes must respect came
 
 - Phone capture: `static/phone.js`, `static/phone.html`.
 - Viewer display: `static/viewer.js`, `static/viewer.html`.
-- Shared visual system: `static/app.css`, `static/theme.js`.
+- Secondary pages: `static/history.html`/`history.js`, `static/settings.html`/`settings.js`, `static/login.html`.
+- Shared visual system: `static/app.css`, `static/theme.js`, `static/mode-switch.js`.
 - Static demo packaging: `scripts/build-static.mjs`.
 - Backend contracts: `/ws/camera`, `/ws/viewer`, `/api/status` in `app/main.py`.
 
@@ -28,7 +29,7 @@ Maintain the live phone-to-viewer interaction loop. UI changes must respect came
 ## Guardrails
 
 - Do not change DOM ids or `data-start-camera` without updating JS selectors and tests.
-- Keep `payload.type` values stable: `config`, `detection`, `error`, `status`, `frame`.
+- Never rename existing `payload.type` values (the set has grown well beyond `config`/`detection`/`frame` — includes `alert`, `zones`, `vlm`, `cameras`, `recording`, …); add new types instead, and keep consumers tolerant of unknown types.
 - Preserve JSON-then-binary ordering for viewer frames.
 - Keep `requestAnimationFrame(drawOverlay)` loops non-blocking.
 - Avoid layout changes that make HUD chips overlap on mobile.

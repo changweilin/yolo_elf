@@ -7,16 +7,17 @@ description: Manage YOLO Elf runtime parameters, settings schema, status payload
 
 ## Focus
 
-Keep configuration, runtime status, and remote-storage data contracts synchronized across backend code, frontend consumers, docs, scripts, and tests. The project currently has no database; treat "data management" as settings/schema management unless a real persistence layer is added.
+Keep configuration, runtime status, and remote-storage data contracts synchronized across backend code, frontend consumers, docs, scripts, and tests. Persistence today is the SQLite sighting history in `app/events.py`; schema changes there must migrate via `ALTER TABLE ADD COLUMN` and tolerate NULL in old rows. Global principles live in `CLAUDE.md`.
 
 ## File Map
 
 - Settings source of truth: `app/config.py`.
 - Runtime status and WebSocket contracts: `app/main.py`, `app/stream_state.py`.
-- Remote data upload: `app/remote_storage.py`.
-- Consumers: `static/phone.js`, `static/viewer.js`.
+- Persistence and uploads: `app/events.py` (SQLite), `app/remote_storage.py`.
+- Feature engines consuming settings: `app/zones.py`, `app/alerts.py`, `app/auth.py`, `app/metrics.py`, `app/recordings.py`, `app/vlm.py`.
+- Frontend consumers: `static/phone.js`, `static/viewer.js`, `static/settings.js`, `static/history.js`.
 - Docs/scripts: `README.md`, `TUNING.md`, `scripts/run.ps1`, `scripts/bench.ps1`.
-- Tests: `tests/test_config.py`, `tests/test_app.py`, `tests/test_remote_storage.py`.
+- Tests: `tests/test_config.py`, `tests/test_app.py`, plus the `tests/test_<feature>.py` of any engine touched.
 
 ## Workflow
 

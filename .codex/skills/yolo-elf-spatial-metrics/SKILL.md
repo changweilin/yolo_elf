@@ -12,6 +12,7 @@ Protect numerical correctness from model output to canvas overlay. Coordinate ma
 ## File Map
 
 - Detection geometry: `app/detector.py`.
+- Zone polygons: `app/zones.py`.
 - Stream metrics: `app/stream_state.py`.
 - Overlay rendering: `static/phone.js`, `static/viewer.js`.
 - Benchmarks: `scripts/bench_detector.py`, `scripts/bench.ps1`.
@@ -23,6 +24,7 @@ Protect numerical correctness from model output to canvas overlay. Coordinate ma
 - `clamp_xyxy` must keep values inside `[0,width]` and `[0,height]`, swapping inverted endpoints.
 - `fitContain(stageWidth, stageHeight, sourceWidth, sourceHeight)` must match CSS `object-fit: contain`.
 - Canvas drawing must account for `devicePixelRatio` through `setTransform`.
+- Zone polygons use normalized `[0,1]` coordinates so they scale with the frame; convert explicitly when mixing with pixel-space boxes.
 - Label backgrounds should not depend on source image coordinates after scaling.
 
 ## Metrics Rules

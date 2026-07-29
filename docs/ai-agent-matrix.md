@@ -1,6 +1,6 @@
 # YOLO Elf AI Skill And Sub-Agent Matrix
 
-本專案已依職能建立 ChatGPT/Codex 與 Claude 兩套對應版本。
+本專案已依職能建立 ChatGPT/Codex 與 Claude 兩套對應版本。跨職能的宏觀原則統一收在根目錄 `CLAUDE.md`；本文件只管分工。
 
 ## Artifact Layout
 
