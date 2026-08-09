@@ -24,7 +24,9 @@
 - **單管線、零延遲積壓 / Single low-latency pipeline** — 只保留最新一張畫面的單槽佇列（single-slot queue），舊畫面會被丟棄，確保偵測永遠跟得上即時輸入。
 - **快速 / 精準雙模式 / Fast & Accurate presets** — 可在小型快速模型與大型高精度模型間即時切換（Viewer 的「快速 / 精準」切換或 `POST /api/detector/mode`），無需重啟。
 - **執行階段調參 / Runtime tuning** — Settings 頁面可即時修改模型、類別、信心門檻與影像尺寸，立即生效。
-- **多物件追蹤 / Multi-object tracking** — 內建 ByteTrack / BoT-SORT，跨影格為每個物件維持穩定 `track_id`，標籤以 `#id` 顯示、錄影中繼資料一併記錄；可 `YOLO_TRACK=0` 關閉。
+- **YOLO26 與 NMS-free 推論 / YOLO26 & NMS-free inference** — 預設模型為 YOLO26（`yolo26s.pt` / `yolo26x.pt`），其一對一頭部直接輸出去重後的框、不跑 NMS，因此沒有 `iou` 門檻要調、匯出的圖也不含後處理節點。`YOLO_END2END=auto|on|off` 可強制切換頭部（`auto` 沿用權重預設；YOLOv8／v11 等無此頭部的模型會忽略此設定），`YOLO_MAX_DET` 調整每幀框數上限。**注意：在本專案的 PyTorch 推論路徑上，NMS-free 本身不會變快**（實測見 `TUNING.md`）；速度紅利主要出現在匯出後的 ONNX／邊緣執行環境。
+- **七種任務通道 / Seven task heads** — Viewer 右側一排圖示按鍵即時切換偵測頭，換頭即換權重、不必重啟：**物件偵測**（方框）、**實例分割**（輪廓多邊形）、**姿態估計**（COCO-17 骨架）、**旋轉框 OBB**（可傾斜方框）、**開放詞彙**（YOLOE-26，用 `YOLO_CLASSES` 文字提示決定要找什麼）、**語意分割**與**單目深度**（逐像素圖層，疊在畫面上，深度附公尺範圍）。前五種仍輸出方框，因此追蹤 / 區域 / 告警 / 歷史照常運作；語意與深度沒有方框，那些功能會看到空白幀（設計如此）。預設 `detect`，行為與過去完全相同。
+- **多物件追蹤 / Multi-object tracking** — 內建六種追蹤器（ByteTrack / BoT-SORT / TrackTrack / FastTrack / OC-SORT / Deep OC-SORT），跨影格為每個物件維持穩定 `track_id`，標籤以 `#id` 顯示、錄影中繼資料一併記錄；以 `YOLO_TRACKER` 選擇，可 `YOLO_TRACK=0` 關閉。
 - **偵測歷史 / Detection history** — 以 `track_id` 為單位把每個物件聚合成一筆「出現紀錄」（首/末出現、停留秒數、經過的區域、最高信心），寫入本機 SQLite，`/history` 頁面可依類別 / 區域 / 時間範圍查詢。需 `YOLO_TRACK`（預設開），可 `EVENT_LOG_ENABLED=0` 關閉。
 - **開放詞彙偵測 / Open-vocabulary detection** — 支援 YOLO-World / YOLOE 模型，以文字提示（如 `person,backpack,fire extinguisher`）自訂偵測類別。
 - **VLM 語意通道 / VLM semantic channel** — 選用的 Florence-2 通道（`VLM_ENABLED=1`），與 YOLO **並存不取代**：慢速定時產生開放詞彙偵測框與場景描述，Viewer 以「YOLO / VLM」分頁切換。VLM 通道無信心分數與追蹤，故不進 zones / alerts / history；YOLO 通道維持全功能。詳見 `TUNING.md`。
@@ -54,7 +56,7 @@
 | GPU | 選用，支援 CUDA 可大幅加速推論 / optional CUDA GPU for fast inference |
 | Tailscale | 選用，供外網手機遠端存取 / optional, for remote phone access |
 
-主要 Python 相依套件 / Key Python dependencies（見 `requirements.txt`）：`fastapi`、`uvicorn[standard]`、`numpy`、`pillow`、`ultralytics`、`httpx`、`websockets`、`pytest`。
+主要 Python 相依套件 / Key Python dependencies（見 `requirements.txt`）：`fastapi`、`uvicorn[standard]`、`numpy`、`pillow`、`ultralytics`（**需 8.4 以上**，YOLO26 權重、`end2end` 參數與新追蹤器都自 8.4.0 起提供）、`httpx`、`websockets`、`pytest`。
 
 ---
 
@@ -141,7 +143,8 @@ The Settings page edits the detector live (runtime edits reset on restart). To b
 
 ```powershell
 .\scripts\run.ps1 -DetectMode accurate -ConfThresh 0.3 -ImgSize 1280 `
-    -FastModel yolov8s.pt -AccurateModel yolov8x.pt `
+    -FastModel yolo26s.pt -AccurateModel yolo26x.pt `
+    -End2End auto -MaxDet 300 -Tracker bytetrack.yaml `
     -Classes "person,backpack,fire extinguisher"
 ```
 
@@ -216,13 +219,23 @@ Behaviour is driven by environment variables. The most common ones:
 | `CAMERAS` | _(空 / empty)_ | 多相機允許清單，逗號分隔的 `id` 或 `id:顯示名`。範例：`front:前門,back:後院`。留空＝單一隱含的 `default` 相機（行為與過去完全相同）。錄影端只能宣告清單內的 id，避免任意 id 灌爆伺服器，也讓 Viewer 版面在相機離線時保持穩定。偵測參數（preset / 信心 / 類別）全域共用；ROI 區域、告警與歷史則各自獨立。 |
 | `MAX_CAMERAS` | `4` | `CAMERAS` 的數量上限（1–16）。超過即啟動失敗。先用 `scripts/bench_detector.py` 量測單卡吞吐再往上調。 |
 | `DETECT_MODE` | `fast` | 啟動時的偵測 preset：`fast`（用 `YOLO_MODEL`）或 `accurate`（用 `YOLO_MODEL_ACCURATE`）。可在執行階段由 Viewer 的「快速 / 精準」切換或 `POST /api/detector/mode` 變更。 |
-| `YOLO_MODEL` | `yolov8s.pt` | **快速** preset 使用的模型，偏向速度。 |
-| `YOLO_MODEL_ACCURATE` | `yolov8x.pt` | **精準** preset 使用的模型；越大越準但越慢，首次使用自動下載。可試 `yolo11x.pt`（最新最高精度）或 `yolov8x-oiv7.pt`（Open Images V7，600 類）。 |
+| `DETECT_TASK` | `detect` | 啟動時的偵測頭：`detect`、`segment`、`pose`、`obb`、`openvocab`、`semantic`、`depth`。可在 Viewer 的圖示按鍵或 `POST /api/detector/task` 即時切換。前五種輸出方框（追蹤／區域／告警／歷史照常）；`semantic`／`depth` 只輸出逐像素圖層，方框為空。 |
+| `YOLO_MODEL_SEGMENT` | `yolo26s-seg.pt` | `segment` 任務的模型（實例分割）。 |
+| `YOLO_MODEL_POSE` | `yolo26s-pose.pt` | `pose` 任務的模型（COCO-17 關鍵點）。 |
+| `YOLO_MODEL_OBB` | `yolo26s-obb.pt` | `obb` 任務的模型（旋轉框，DOTA 類別，多為空拍視角）。 |
+| `YOLO_MODEL_OPENVOCAB` | `yoloe-26s-seg.pt` | `openvocab` 任務的模型（YOLOE-26）。搭配 `YOLO_CLASSES` 文字提示；`-pf` 變體免提示。此任務**強制 FP32**（YOLOE 的文字嵌入與半精度骨幹會型別衝突）。 |
+| `YOLO_MODEL_SEMANTIC` | `yolo26s-sem.pt` | `semantic` 任務的模型（逐像素類別圖）。 |
+| `YOLO_MODEL_DEPTH` | `yolo26s-depth.pt` | `depth` 任務的模型（單目深度，公尺）。需 `ultralytics>=8.4.104`。 |
+| `RASTER_MAX_SIZE` | `256` | `semantic`／`depth` 圖層編碼成 PNG 前縮到的長邊上限（32–1024）。預設下每幀約 4–7 KB（10 fps 約 46–66 KB/s）；調大更清晰但每幀都要付頻寬。 |
+| `YOLO_MODEL` | `yolo26s.pt` | **快速** preset 使用的模型，偏向速度。`DETECT_TASK=detect` 時才會用到。 |
+| `YOLO_MODEL_ACCURATE` | `yolo26x.pt` | **精準** preset 使用的模型；越大越準但越慢，首次使用自動下載。可試 `yolov8x-oiv7.pt`（Open Images V7，600 類）或任何自訓 `best.pt`；舊的 `yolov8*.pt` / `yolo11*.pt` 仍完全相容。 |
 | `YOLO_CLASSES` | _(空 / empty)_ | 開放詞彙模型（YOLO-World / YOLOE）的逗號分隔提示類別。留空維持模型內建詞彙；需搭配 `-world`/`-worldv2` 模型，封閉集偵測器會忽略。範例：`person,backpack,fire extinguisher`。 |
 | `YOLO_DEVICE` | `auto` | `auto`、`cpu`、`0` 或其他 Ultralytics 裝置目標。 |
 | `YOLO_HALF` | `1` | 對支援的 CUDA 裝置啟用 FP16（CPU 忽略）。 |
 | `YOLO_TRACK` | `1` | 多物件追蹤：跨影格為每個框指派穩定的 `track_id`，Viewer／Recorder 標籤會以 `#id` 前綴顯示，錄影 sidecar 亦記錄。設 `0` 退回逐格獨立偵測。 |
-| `YOLO_TRACKER` | `bytetrack.yaml` | 追蹤器設定。`bytetrack.yaml` 較輕量；`botsort.yaml` 加入 ReID 但成本較高。 |
+| `YOLO_TRACKER` | `bytetrack.yaml` | 追蹤器設定。Ultralytics 8.4 內建六種：`bytetrack.yaml`（輕量、預設）、`fasttrack.yaml`（最省）、`ocsort.yaml` / `tracktrack.yaml`（遮擋復原較好）、`botsort.yaml` / `deepocsort.yaml`（加入 ReID，最準也最貴）。也可填自訂 `.yaml` 路徑。 |
+| `YOLO_END2END` | `auto` | NMS-free（一對一頭部）開關，僅 YOLO26 / YOLOv10 權重具備。`auto` 沿用權重內建設定（在無此頭部的舊模型上完全不影響行為）；`on` 強制端到端輸出、跳過 NMS（`iou` 門檻隨之失效）；`off` 強制走一對多頭部 + NMS，便於 A/B 比較。`/api/status` 的 `detector.end2end_capable` 顯示目前權重是否支援。 |
+| `YOLO_MAX_DET` | `300` | 每幀保留的最多偵測框數（1–1000）。與 Ultralytics 預設一致；端到端頭部內部固定至少 300 個候選，故調低只是截斷輸出，不會加速推論。 |
 | `YOLO_EXPORT` | _(空 / empty)_ | 首次載入時把 `.pt` 自動 export 成加速格式並改載入產物：`engine`（TensorRT，需 GPU，綁定裝置 + 版本）或 `onnx`。產物快取於 `.pt` 同目錄；export 失敗會退回原 `.pt`（狀態顯示 `last_export_error`）。留空＝直接載入模型名稱（可為預先 export 的 `.engine`/`.onnx`）。 |
 | `YOLO_WARMUP` | `0` | 啟動時預熱偵測器。 |
 | `VLM_ENABLED` | `0` | 開啟**加法式 VLM 通道**（Florence-2）。與 YOLO 並存、不取代：一個慢速定時 worker 取各相機最新幀，產生開放詞彙偵測框（Phase 1）與場景描述（Phase 2），以獨立 `vlm` 訊息推給 Viewer，Viewer 以「YOLO / VLM」分頁切換。VLM 框沒有信心分數也沒有 `track_id`，故**不進 zones / alerts / history**。device/half 沿用 `YOLO_DEVICE`/`YOLO_HALF`，提示類別沿用 `YOLO_CLASSES`。留空＝關閉。需 `transformers`、`timm`、`einops`（見 `requirements.txt`）。 |
@@ -298,8 +311,9 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `GET /api/status` | 完整執行階段快照：串流統計、偵測器狀態、錄影、遠端儲存。頂層數字是全機彙總，`cameras` 為各路明細；`camera_id` 參數選擇 `zones` 要回哪一路。 |
 | `GET /api/cameras` | 相機允許清單、預設相機與各路串流狀態 / configured cameras and their stream state. |
 | `POST /api/detector/mode` | 切換 preset。Body：`{"mode": "fast"}` 或 `{"mode": "accurate"}`。 |
+| `POST /api/detector/task` | 切換偵測頭。Body：`{"task": "segment"}`（`detect`／`segment`／`pose`／`obb`／`openvocab`／`semantic`／`depth`）。新權重在背景載入，可輪詢 `/api/status` 的 `detector.loaded`。 |
 | `GET /api/detector/config` | 目前偵測器設定 / current detector configuration. |
-| `POST /api/detector/config` | 執行階段更新設定（部分更新，只變更傳入的鍵）/ partial runtime update. |
+| `POST /api/detector/config` | 執行階段更新設定（部分更新，只變更傳入的鍵）。可傳 `mode`、`task`、`task_models`（如 `{"pose": "yolo26x-pose.pt"}`）、`fast_model`、`accurate_model`、`classes`、`conf_thresh`、`img_size`、`max_det`、`end2end`（`auto`/`on`/`off`）、`classifier_model`、`classifier_min_conf`、`classifier_max_boxes`。 |
 | `GET /api/alerts` | 目前告警規則與觸發狀態 / current alert rules and firing state. |
 | `POST /api/alerts` | 執行階段替換告警規則。Body：`{"rules": [...]}` 或直接傳陣列 / replace alert rules at runtime. |
 | `GET /api/zones` | 目前 ROI 區域。Query：`camera_id`（省略＝預設相機）；回應含全部相機的 `cameras` 對照。 |

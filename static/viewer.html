@@ -6,7 +6,7 @@
     <title>YOLO Elf Viewer</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="/static/app.css?v=ui-7" />
+    <link rel="stylesheet" href="/static/app.css?v=ui-8" />
   </head>
   <body>
     <main class="viewer-shell">
@@ -88,6 +88,55 @@
             <button type="button">Open recorder</button>
           </a>
         </div>
+        <div class="panel-control panel-control-stacked">
+          <span class="panel-control-label">任務</span>
+          <!-- Server-side head switch: unlike the YOLO/VLM channel toggle this
+               changes what the single detection worker runs, for every viewer.
+               Icon-only to fit seven options in the panel width; the accessible
+               name lives on aria-label with the same text in the tooltip. -->
+          <div id="taskGroup" class="task-switch" role="group" aria-label="偵測任務">
+            <button type="button" data-detect-task="detect" aria-pressed="true" aria-label="物件偵測" title="物件偵測：方框 + 追蹤 + 區域 / 告警 / 歷史">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="3" y="5" width="11" height="9" rx="1"></rect>
+                <rect x="11" y="11" width="10" height="8" rx="1"></rect>
+              </svg>
+            </button>
+            <button type="button" data-detect-task="segment" aria-pressed="false" aria-label="實例分割" title="實例分割：每個物件的輪廓多邊形">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M4 14c1-6 6-9 10-8s6 5 5 9-5 7-9 6-7-3-6-7z"></path>
+                <path d="M8 13c.5-2.5 2.5-4 4.5-3.5"></path>
+              </svg>
+            </button>
+            <button type="button" data-detect-task="pose" aria-pressed="false" aria-label="姿態估計" title="姿態估計：人體骨架關鍵點">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <circle cx="12" cy="4" r="2"></circle>
+                <path d="M12 6v7M12 8l-4 3M12 8l4 3M12 13l-3 7M12 13l3 7"></path>
+              </svg>
+            </button>
+            <button type="button" data-detect-task="obb" aria-pressed="false" aria-label="旋轉框偵測" title="旋轉框：可傾斜的方框（空拍 / 遙測常用）">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="5" y="7" width="14" height="10" rx="1" transform="rotate(-20 12 12)"></rect>
+              </svg>
+            </button>
+            <button type="button" data-detect-task="openvocab" aria-pressed="false" aria-label="開放詞彙" title="開放詞彙（YOLOE-26）：用「開放詞彙類別」文字提示自訂要找什麼">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <circle cx="11" cy="11" r="6"></circle>
+                <path d="M20 20l-4.5-4.5M9 11h4M11 9v4"></path>
+              </svg>
+            </button>
+            <button type="button" data-detect-task="semantic" aria-pressed="false" aria-label="語意分割" title="語意分割：整張畫面逐像素分類（無方框）">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M3 4h8v7H3zM11 4h10v7H11zM3 11h6v9H3zM9 11h12v9H9z"></path>
+              </svg>
+            </button>
+            <button type="button" data-detect-task="depth" aria-pressed="false" aria-label="深度估計" title="單目深度估計：逐像素距離（亮＝近，無方框）">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M3 20l9-16 9 16z"></path>
+                <path d="M7.5 12h9M9.7 16h4.6"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
         <div class="panel-control">
           <span class="panel-control-label">辨識模式</span>
           <div id="modeGroup" class="segmented-control detect-mode" role="group" aria-label="辨識模式">
@@ -95,6 +144,9 @@
             <button type="button" data-detect-mode="accurate" aria-pressed="false" title="精準辨識（較大模型，準確優先）">精準</button>
           </div>
         </div>
+        <!-- Class swatches (semantic) or the metre range (depth). Empty and
+             hidden for the box tasks, which label themselves on the canvas. -->
+        <div id="rasterLegend" class="raster-legend" hidden></div>
         <div id="channelGroupControl" class="panel-control" hidden>
           <span class="panel-control-label">通道</span>
           <div id="channelGroup" class="segmented-control" role="group" aria-label="偵測通道">

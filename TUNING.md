@@ -31,8 +31,8 @@ $env:YOLO_DEVICE = "0"
 
 ```powershell
 # 在「將來要跑伺服器」的那台機器上 export（engine 綁定該 GPU + 驅動/TensorRT 版本）
-python scripts\export_engine.py yolov8s.pt --format engine --half --imgsz 1280
-$env:YOLO_MODEL = "yolov8s.engine"
+python scripts\export_engine.py yolo26s.pt --format engine --half --imgsz 1280
+$env:YOLO_MODEL = "yolo26s.engine"
 .\scripts\run.ps1
 ```
 
@@ -46,18 +46,114 @@ $env:YOLO_EXPORT = "onnx"   # 或 "engine"
 - Export **失敗會自動退回原 `.pt`**（不加速但不中斷），錯誤顯示在 `/api/status` 的 `detector.last_export_error`；實際載入了哪個檔看 `detector.loaded_source`。
 - `.engine` **無法在無 GPU 的機器 export**，且綁定裝置 + TensorRT/CUDA 版本，換卡或升級驅動要重新 export（刪掉舊 `.engine` 讓它重建，或重跑上面的腳本）。
 - FP16（`--half` / `YOLO_HALF=1`）沿用既有半精度設定，僅 CUDA 生效。
+- 偵測頭部在 export 當下就固定進產物裡，之後無法用 `YOLO_END2END` 覆寫。因此路線 B 會把
+  `YOLO_END2END=on|off` 寫進檔名（如 `yolo26s-e2eon.onnx`），切換設定會重新 export 而不是
+  沿用另一種頭部的舊快取；`auto`（預設）維持原本的 `yolo26s.onnx` 命名。路線 A 請自行在
+  `export_engine.py` 之外確認產物的頭部與你想要的一致。
+- ⚠️ 因此**開著 `YOLO_EXPORT` 時，在設定頁改「NMS-free 端到端」會丟掉已載入的權重並重新
+  export**，第一張影格可能等上數十秒到數分鐘（TensorRT 尤其久）。沒開 export 時只是換一個
+  predict 參數，下一張影格立即生效、不重載。
 
 ## 快速 / 精準模式切換
 
 不必重啟即可在兩個預設之間切換：在 Viewer 右側面板按 **快速 / 精準**，或呼叫
 `POST /api/detector/mode`（body 為 `{"mode": "fast"}` 或 `{"mode": "accurate"}`）。
 
-- **快速 (fast)**：使用 `YOLO_MODEL`（預設 `yolov8s.pt`），速度優先。
-- **精準 (accurate)**：使用 `YOLO_MODEL_ACCURATE`（預設 `yolov8x.pt`，YOLOv8 系列中最準），
-  首次切換會自動下載權重；想要最新、最高準確度可設成 `yolo11x.pt`。
+- **快速 (fast)**：使用 `YOLO_MODEL`（預設 `yolo26s.pt`），速度優先。
+- **精準 (accurate)**：使用 `YOLO_MODEL_ACCURATE`（預設 `yolo26x.pt`，YOLO26 系列中最準），
+  首次切換會自動下載權重。舊的 `yolov8*.pt` / `yolo11*.pt` 仍完全相容，可直接指回去比較。
 
 起始模式由 `DETECT_MODE` 決定（預設 `fast`）。切到精準模式後，下一張影格才會載入較大的模型，
 因此第一張的延遲會略高，之後維持快取不再重載。
+
+## 七種任務通道（圖示切換）
+
+Viewer 右側面板最上方一排圖示按鍵切換偵測頭，或 `POST /api/detector/task`
+（`{"task": "segment"}`），或啟動時 `DETECT_TASK`。每個頭是各自的權重，切換時在背景載入，
+進度沿用「切換模型中…」進度條；各頭的權重**各自快取**，切回去不用重載。
+
+| 任務 | 預設權重 | 額外輸出 | 進區域／告警／歷史？ |
+| --- | --- | --- | --- |
+| `detect`（預設） | `yolo26s.pt` / `yolo26x.pt` | — | ✅ |
+| `segment` 實例分割 | `yolo26s-seg.pt` | 每框 `mask` 輪廓多邊形 | ✅ |
+| `pose` 姿態估計 | `yolo26s-pose.pt` | 每框 `keypoints`（COCO-17） | ✅ |
+| `obb` 旋轉框 | `yolo26s-obb.pt` | 每框 `obb` 四角點 | ✅ |
+| `openvocab` 開放詞彙 | `yoloe-26s-seg.pt` | 每框 `mask`，類別由 `YOLO_CLASSES` 決定 | ✅ |
+| `semantic` 語意分割 | `yolo26s-sem.pt` | 整張 `raster`（類別色圖） | ❌ 無方框 |
+| `depth` 單目深度 | `yolo26s-depth.pt` | 整張 `raster`（灰階 + 公尺範圍） | ❌ 無方框 |
+
+**為什麼前五種還能進區域／告警／歷史**：那些功能全都以「一個有 `track_id` 的方框」定義。
+分割與姿態的額外資料是**掛在框上**的欄位，框本身沒變；旋轉框則同時給出 `obb` 四角點與
+Ultralytics 算好的軸對齊 `xyxy`，下游吃 `xyxy`、疊圖畫 `obb`，兩邊都不用改。
+
+**語意與深度沒有方框**，因此 `/api/status` 會回 `detector.emits_boxes: false`，區域／告警／
+歷史在這兩個任務下看到的是空白幀——這是刻意的，不是壞掉。
+
+⚠️ 任務是**伺服器端**的單一設定（全機只有一個 GPU worker），切換會影響**所有** viewer，
+不像 YOLO／VLM 分頁那樣只影響自己這一分頁。需要同時取得兩種輸出，只能開兩個伺服器實例。
+
+### 幾個實務注意事項
+
+- **`obb` 用的是 DOTA 類別**（飛機、船、儲油槽、球場…），大多是**空拍／遙測視角**。拿一般
+  水平視角的照片去跑，多半什麼都偵測不到——這不是壞掉，是資料集不對。
+- **`openvocab` 強制 FP32**。YOLOE 把 float32 的文字嵌入接進頭部，半精度骨幹會直接丟
+  `mat1 and mat2 must have the same dtype`。因此這個任務忽略 `YOLO_HALF`，
+  `/api/status` 的 `detector.half` 會如實回 `false`。記得搭配 `YOLO_CLASSES` 給提示詞，
+  留空就只會用模型內建詞彙。`-pf`（prompt-free）變體則本來就免提示。
+- **`openvocab` 第一次跑會自動裝東西**。Ultralytics 的 AutoUpdate 會從 GitHub 安裝 `clip`
+  （及 `ftfy`／`regex`／`tqdm`／`wcwidth`）並下載文字編碼器 `mobileclip2_b.ts` 到工作目錄
+  （已列入 `.gitignore`）。這需要網路與 git；離線機器請先在有網路時跑一次這個任務暖機。
+  刻意**沒有**把 `clip` 寫進 `requirements.txt`——它是 git 相依，會拖累所有不用這個任務的人。
+- **`depth` 需要 `ultralytics>=8.4.104`**。更舊的版本載入 `yolo26s-depth.pt` 會失敗於
+  `Can't get attribute 'DepthModel'`，錯誤顯示在 `/api/status` 的 `detector.last_load_error`。
+- **頻寬**：`semantic`／`depth` 每幀都要送一張 PNG。預設 `RASTER_MAX_SIZE=256` 下實測
+  語意約 4.0 KB、深度約 6.6 KB（10 fps 約 46 / 66 KB/s）。深度圖會先量化成 32 階再編碼——
+  平滑的 8-bit 漸層幾乎壓不動（同樣設定下要 17 KB），量化後在半透明疊圖上看不出差別，
+  真正的數值範圍由 `min_m`／`max_m` 另外帶。調大 `RASTER_MAX_SIZE` 會等比例吃頻寬。
+- **分割輪廓會被抽樣**到最多 48 個點（等間距抽樣，不是截斷）。原始輪廓動輒數百點，
+  10 fps × 每個實例會蓋過整個 payload；疊圖是半透明色塊，看不出差異。
+
+## NMS-free 端到端推論（YOLO26）
+
+YOLO26 / YOLOv10 權重帶有「一對一」頭部：每個物件只輸出一個框，因此推論後不需要跑
+Non-Maximum Suppression。
+
+- `YOLO_END2END=auto`（預設）沿用權重內建的頭部設定。**這是唯一在所有世代模型上都與過去
+  逐位元相同的值**——YOLOv8 / v11 沒有這個頭部，三個選項對它們一律等同關閉。
+- `on` 強制端到端輸出。此時 `iou` 門檻不再有作用（沒有 NMS 可調），`conf` 與 `YOLO_MAX_DET` 照常生效。
+- `off` 強制走一對多頭部 + NMS，用來和 `on` 做 A/B 比較。
+
+### 實測：在 PyTorch 路徑上不要期待它變快
+
+`yolo26s.pt`、RTX 3060、`scripts/bench_detector.py`（合成影格，`--warmup` 後取 p50）：
+
+| 環境 | `end2end=on` p50 | `end2end=off` p50 |
+| --- | --- | --- |
+| CUDA, FP16, `imgsz 1280`, 30 幀 | 15.00 ms | **14.83 ms** |
+| CPU, `imgsz 640`, 15 幀 | 38.87 ms | **34.50 ms** |
+
+也就是說，**開著 NMS-free 反而略慢一點**。原因是這條路徑上 NMS 只處理幾個框、成本本來就低，
+而一對一頭部要多做一些事。Ultralytics 官方宣稱的「CPU 上快 43%」是 **yolo26n 對 yolo11n 的
+ONNX 比較**（換模型 + 換執行環境），不是同一組權重 on/off 的差異——不要把那個數字套到這裡。
+
+NMS-free 真正值錢的地方是：匯出的圖裡不含後處理節點（ONNX / TensorRT / 邊緣加速器部署更單純）、
+沒有 `iou` 門檻要調、輸出框數上限固定。**追求延遲請優先做 `IMG_SIZE`、FP16 與 export，
+不是切這個開關。**
+
+換個角度，這個開關**會改變輸出**：`bus.jpg`、`CONF_THRESH=0.2` 下 `on` 給 8 個框、`off` 給 6 個
+（NMS 在 `iou=0.7` 壓掉了兩個重疊框）。要重現上表：
+
+```powershell
+.\scripts\bench.ps1 -Frames 30 -Warmup 5 -Model yolo26s.pt -End2End on
+.\scripts\bench.ps1 -Frames 30 -Warmup 5 -Model yolo26s.pt -End2End off
+```
+
+`/api/status` 的 `detector.end2end`（目前設定）與 `detector.end2end_capable`（權重是否真的
+有這個頭部，於載入當下取樣）可以確認設定有沒有落到實處；`end2end=on` 但 `end2end_capable=false`
+代表模型沒有一對一頭部，Ultralytics 靜默忽略了這個要求。
+
+`YOLO_MAX_DET`（預設 300）是每幀保留的框數上限。端到端頭部內部固定至少保留 300 個候選再截斷，
+所以調低只會少拿框、不會變快；框被截斷時留下的是信心最高的那些。
 
 ## 物件追蹤（track_id）
 
@@ -65,8 +161,10 @@ $env:YOLO_EXPORT = "onnx"   # 或 "engine"
 跨影格為每個物件維持穩定 `track_id`。Viewer／Recorder 疊圖以 `#id` 前綴標示，錄影的
 `.detections.json` sidecar 每個框也會帶 `track_id`，方便事後統計進出、停留時間、軌跡。
 
-- **追蹤器**：`YOLO_TRACKER` 預設 `bytetrack.yaml`（輕量、即時優先）；改 `botsort.yaml` 可加入
-  ReID（外觀特徵）在遮擋後更容易接回同一 id，但成本較高。
+- **追蹤器**：`YOLO_TRACKER` 預設 `bytetrack.yaml`（輕量、即時優先）。Ultralytics 8.4 內建六種，
+  由便宜到貴大致是：`fasttrack.yaml` → `bytetrack.yaml` → `ocsort.yaml` → `tracktrack.yaml` →
+  `botsort.yaml` → `deepocsort.yaml`；後兩者加入 ReID（外觀特徵），遮擋後更容易接回同一 id，
+  但每幀多跑一次特徵抽取。也可填自訂 `.yaml` 路徑（由 Ultralytics 解析，打錯會在第一張影格報錯）。
 - **關閉**：`YOLO_TRACK=0`（或 `run.ps1 -Track off`）退回逐格獨立偵測，`track_id` 為 `null`。
 - 追蹤狀態是每個模型各自維護：切換 快速／精準 模式時 id 不會延續。這是啟動時的設定，
   不透過設定頁即時切換（避免追蹤器狀態殘留造成誤判）。
@@ -216,8 +314,10 @@ scrape_configs:
   文件版面等現成 `.pt`，下載後把對應環境變數指到該檔即可。
 - **自訂類別**：用你自己的資料訓練出的 `best.pt` 同樣直接指過去。
 
-⚠️ 影像分類 (`-cls`)、分割 (`-seg`)、姿態 (`-pose`)、旋轉框 (`-obb`) 模型的輸出格式不同，
-直接替換會讓框體解析失效，需要另外改 `detector.py`。
+⚠️ 這裡指的是**偵測**權重。分割 (`-seg`)、姿態 (`-pose`)、旋轉框 (`-obb`)、語意 (`-sem`)、
+深度 (`-depth`) 的輸出格式不同，**不要**塞進 `YOLO_MODEL`——請改用對應的任務通道
+（`DETECT_TASK` 與各自的 `YOLO_MODEL_*`，見上面「七種任務通道」）。影像分類 (`-cls`) 權重
+則走「第二階段分類器」（`CLASSIFIER_MODEL`），那條路徑本來就吃 `-cls`。
 
 ### 開放詞彙（自己打字決定要偵測什麼）
 
@@ -277,7 +377,8 @@ $env:YOLO_CLASSES = "person,backpack,fire extinguisher"   # 有值→開放詞�
 
 ## 三種設定方式
 
-辨識參數（模式、模型、開放詞彙類別、信心門檻、影像尺寸）有三個入口，依「是否需要重啟」區分：
+辨識參數（任務、模式、模型、開放詞彙類別、信心門檻、影像尺寸、最多框數、NMS-free）有三個
+入口，依「是否需要重啟」區分：
 
 ### 1. 設定頁面（免重啟，即時生效）
 
@@ -295,16 +396,21 @@ $env:YOLO_CLASSES = "person,backpack,fire extinguisher"   # 有值→開放詞�
 ```
 
 可用參數：`-DetectMode`（fast/accurate）、`-FastModel`、`-AccurateModel`、`-Classes`、
-`-ConfThresh`、`-ImgSize`。沒帶的參數維持環境變數或預設值。
+`-ConfThresh`、`-ImgSize`、`-MaxDet`、`-End2End`（auto/on/off）、`-Track`（on/off）、`-Tracker`。
+沒帶的參數維持環境變數或預設值。
 
 ### 3. 環境變數（永久 / CI）
 
-`DETECT_MODE`、`YOLO_MODEL`、`YOLO_MODEL_ACCURATE`、`YOLO_CLASSES`、`CONF_THRESH`、`IMG_SIZE`，
-細節見 `README.md` 的環境變數表。
+`DETECT_TASK`、`DETECT_MODE`、`YOLO_MODEL`、`YOLO_MODEL_ACCURATE`、各任務的 `YOLO_MODEL_*`、
+`RASTER_MAX_SIZE`、`YOLO_CLASSES`、`CONF_THRESH`、`IMG_SIZE`、`YOLO_MAX_DET`、`YOLO_END2END`、
+`YOLO_TRACK`、`YOLO_TRACKER`，細節見 `README.md` 的環境變數表。
+
+> `YOLO_TRACK` / `YOLO_TRACKER` 只有前兩個入口（啟動參數、環境變數）——追蹤器狀態存在 model
+> 物件裡，中途換掉會留下殘影，所以設定頁不提供即時切換。其餘參數三個入口皆可。
 
 ## 提高辨識率的優先順序
 
-1. 換更大的模型，例如 `yolov8s.pt`、`yolov8m.pt`，或使用針對你的目標類別訓練的 `best.pt`。
+1. 換更大的模型，例如 `yolo26m.pt`、`yolo26l.pt`，或使用針對你的目標類別訓練的 `best.pt`。
 2. 提高輸入解析度與 YOLO `IMG_SIZE`，小物件通常會更容易被看見。
 3. 提高 `JPEG_QUALITY`，避免壓縮破壞細節。
 4. 降低 `CONF_THRESH` 會提高召回率，但也會增加誤判。
@@ -312,7 +418,7 @@ $env:YOLO_CLASSES = "person,backpack,fire extinguisher"   # 有值→開放詞�
 目前預設已偏向辨識率（等同下列設定，可直接執行 `.\scripts\run.ps1`）：
 
 ```powershell
-$env:YOLO_MODEL = "yolov8s.pt"
+$env:YOLO_MODEL = "yolo26s.pt"
 $env:YOLO_HALF = "1"
 $env:CAPTURE_WIDTH = "1920"
 $env:CAPTURE_HEIGHT = "1080"
@@ -324,7 +430,7 @@ $env:YOLO_DEVICE = "0"
 ```
 
 若你需要更快但可以接受漏檢，可把 `IMG_SIZE` 改回 `640`、`JPEG_QUALITY`
-改回 `0.65`、模型換回 `yolov8n.pt`。
+改回 `0.65`、模型換回 `yolo26n.pt`。
 
 ## 存取控制（遠端使用前先開）
 

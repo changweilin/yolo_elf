@@ -6,7 +6,7 @@
     <title>YOLO Elf Settings</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="/static/app.css?v=ui-6" />
+    <link rel="stylesheet" href="/static/app.css?v=ui-8" />
   </head>
   <body class="settings-page">
     <main class="settings-shell">
@@ -81,23 +81,26 @@
 
             <label class="settings-row" for="fastModelInput">
               <span class="settings-label">快速模型</span>
-              <input id="fastModelInput" type="text" list="modelPresets" autocomplete="off" spellcheck="false" placeholder="yolov8s.pt" />
+              <input id="fastModelInput" type="text" list="modelPresets" autocomplete="off" spellcheck="false" placeholder="yolo26s.pt" />
             </label>
 
             <label class="settings-row" for="accurateModelInput">
               <span class="settings-label">精準模型</span>
-              <input id="accurateModelInput" type="text" list="modelPresets" autocomplete="off" spellcheck="false" placeholder="yolov8x.pt" />
+              <input id="accurateModelInput" type="text" list="modelPresets" autocomplete="off" spellcheck="false" placeholder="yolo26x.pt" />
             </label>
 
             <!-- Curated presets shared by both model inputs. Inputs stay free-text
                  so custom paths and open-vocab models still work; this only adds
                  quick-pick suggestions. First use auto-downloads the weights. -->
             <datalist id="modelPresets">
-              <option value="yolov8n.pt" label="COCO 80 類 · 最快"></option>
-              <option value="yolov8s.pt" label="COCO 80 類 · 快速"></option>
-              <option value="yolov8m.pt" label="COCO 80 類 · 平衡"></option>
-              <option value="yolov8l.pt" label="COCO 80 類 · 偏準"></option>
-              <option value="yolov8x.pt" label="COCO 80 類 · 最準"></option>
+              <option value="yolo26n.pt" label="YOLO26 · COCO 80 類 · 最快"></option>
+              <option value="yolo26s.pt" label="YOLO26 · COCO 80 類 · 快速"></option>
+              <option value="yolo26m.pt" label="YOLO26 · COCO 80 類 · 平衡"></option>
+              <option value="yolo26l.pt" label="YOLO26 · COCO 80 類 · 偏準"></option>
+              <option value="yolo26x.pt" label="YOLO26 · COCO 80 類 · 最準"></option>
+              <option value="yolov8n.pt" label="YOLOv8 · COCO 80 類 · 最快"></option>
+              <option value="yolov8s.pt" label="YOLOv8 · COCO 80 類 · 快速"></option>
+              <option value="yolov8x.pt" label="YOLOv8 · COCO 80 類 · 最準"></option>
               <option value="yolov8x-oiv7.pt" label="Open Images V7 · 600 類（含更多動植物）"></option>
               <option value="yolov8x-worldv2.pt" label="YOLO-World · 開放詞彙（搭配下方類別）"></option>
             </datalist>
@@ -140,6 +143,24 @@
               <input id="imgSizeInput" type="number" min="32" max="4096" step="32" placeholder="1280" />
             </label>
 
+            <label class="settings-row" for="maxDetInput">
+              <span class="settings-label">最多偵測框數</span>
+              <!-- step must stay 1: any integer in range is valid server-side, and a
+                   coarser step would fail HTML5 validation (silently blocking the
+                   whole form's submit) for values that the API accepts. -->
+              <input id="maxDetInput" type="number" min="1" max="1000" step="1" placeholder="300" />
+            </label>
+
+            <div class="settings-row">
+              <label class="settings-label" id="end2endLabel">NMS-free 端到端</label>
+              <div id="end2endGroup" class="segmented-control segmented-compact" role="group" aria-labelledby="end2endLabel">
+                <button type="button" data-end2end="auto" aria-pressed="true" title="沿用模型權重內建的頭部設定">自動</button>
+                <button type="button" data-end2end="on" aria-pressed="false" title="強制使用一對一頭部，不跑 NMS">開</button>
+                <button type="button" data-end2end="off" aria-pressed="false" title="強制使用一對多頭部，照舊跑 NMS">關</button>
+              </div>
+            </div>
+            <p class="settings-hint">僅 YOLO26／YOLOv10 權重有端到端頭部：開啟後直接輸出去重後的框、不跑 NMS，也就沒有 <code>iou</code> 門檻。<strong>自動</strong>＝沿用權重預設（YOLOv8／v11 等舊模型無此頭部，三個選項一律等同關閉）。本機 PyTorch 推論下開關它<strong>不會變快</strong>（實測略慢，見 <code>TUNING.md</code>），但會改變框數；要調延遲請改影像尺寸或改用匯出模型。</p>
+
             <div class="settings-actions">
               <button id="resetButton" type="button" class="compact-button">重設</button>
               <button id="saveButton" type="submit" class="primary">套用</button>
@@ -153,10 +174,11 @@
             <span class="panel-title" id="guideTitle">設置流程</span>
           </div>
           <ol class="settings-steps">
-            <li><strong>選模型</strong>：填入快速／精準模型檔名。一般物件用 <code>yolov8x.pt</code>（COCO 80 類）或 <code>yolov8x-oiv7.pt</code>（Open Images 600 類）；專用任務（人臉、車牌、安全帽）填下載好的 <code>.pt</code>。首次使用會自動下載權重。</li>
+            <li><strong>選模型</strong>：填入快速／精準模型檔名。一般物件用 <code>yolo26x.pt</code>（COCO 80 類，NMS-free）或 <code>yolov8x-oiv7.pt</code>（Open Images 600 類）；專用任務（人臉、車牌、安全帽）填下載好的 <code>.pt</code>。首次使用會自動下載權重。</li>
             <li><strong>開放詞彙（選用）</strong>：模型填 <code>yolov8x-worldv2.pt</code>，在「開放詞彙類別」輸入要偵測的詞，例如 <code>person, backpack</code>。</li>
             <li><strong>物種圖鑑（選用）</strong>：在「物種分類模型」填 <code>yolov8x-cls.pt</code>（ImageNet 1000 類），偵測框會再經第二段分類標出物種；「物種信心門檻」可過濾低信心的猜測。留空＝關閉。</li>
-            <li><strong>調靈敏度</strong>：信心門檻越低召回越高、誤判越多；影像尺寸越大小物件越清楚但越慢。</li>
+            <li><strong>調靈敏度</strong>：信心門檻越低召回越高、誤判越多；影像尺寸越大小物件越清楚但越慢。畫面物件很多時可調高「最多偵測框數」（預設 300）。</li>
+            <li><strong>NMS-free（選用）</strong>：用 YOLO26 權重時維持「自動」即可；想與舊行為逐項比較，切到「關」會改走一對多頭部 + NMS，重疊框會被壓掉。這不是效能開關。</li>
             <li><strong>套用</strong>：按「套用」即時生效，不必重啟。換模型後下一張影格才載入新權重，第一張會略慢。</li>
             <li><strong>確認</strong>：右上狀態顯示 <code>已套用</code> 即成功；在 Viewer 頁切到對應模式可看到效果。</li>
           </ol>

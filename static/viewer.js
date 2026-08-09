@@ -31,6 +31,27 @@ const channelButtons = channelGroup
   : [];
 const vlmCaption = document.querySelector("#vlmCaption");
 
+// Task switch (detect / segment / pose / obb / open-vocab / semantic / depth).
+// Unlike the channel toggle this one *is* server-side: it swaps which head the
+// single detection worker runs, so it affects every viewer at once.
+const taskGroup = document.querySelector("#taskGroup");
+const taskButtons = taskGroup
+  ? Array.from(taskGroup.querySelectorAll("[data-detect-task]"))
+  : [];
+const rasterLegend = document.querySelector("#rasterLegend");
+
+// COCO-17 limb pairs, 0-indexed (Ultralytics publishes them 1-indexed).
+const POSE_SKELETON = [
+  [15, 13], [13, 11], [16, 14], [14, 12], [11, 12],
+  [5, 11], [6, 12], [5, 6], [5, 7], [6, 8], [7, 9], [8, 10],
+  [1, 2], [0, 1], [0, 2], [1, 3], [2, 4], [3, 5], [4, 6],
+];
+// Occluded joints come back at (0, 0) with near-zero confidence; anything below
+// this is skipped so the skeleton is not dragged to the frame corner.
+const KEYPOINT_MIN_CONF = 0.25;
+// Full-frame overlay; opaque enough to read, sheer enough to keep the scene.
+const RASTER_ALPHA = 0.55;
+
 import { createModelSwitch } from "./mode-switch.js";
 
 const modelSwitch = createModelSwitch({
@@ -50,15 +71,29 @@ const demoMode =
 // stage shows just its pane. Read from the page URL, not the module URL.
 const pinnedCamera = new URLSearchParams(window.location.search).get("camera_id") || "";
 
+// The front camera also carries a segmentation contour and a rotated box, so the
+// static build shows what the segment / obb task channels look like without a
+// server. The renderers key off the presence of these fields, not the task name.
 const demoDetection = {
   frame_id: 42,
   width: 1280,
   height: 720,
   inference_ms: 18.6,
   boxes: [
-    { xyxy: [124, 137, 392, 535], class_id: 0, label: "monitor", confidence: 0.88, track_id: 1, zones: ["doorway"] },
+    {
+      xyxy: [124, 137, 392, 535], class_id: 0, label: "monitor", confidence: 0.88,
+      track_id: 1, zones: ["doorway"],
+      mask: [
+        [150, 160], [330, 145], [378, 220], [392, 380], [360, 505], [250, 535],
+        [160, 500], [128, 360], [134, 230],
+      ],
+    },
     { xyxy: [489, 302, 633, 514], class_id: 1, label: "bottle", confidence: 0.76, track_id: 2, zones: [] },
-    { xyxy: [759, 219, 1062, 521], class_id: 2, label: "package", confidence: 0.93, track_id: 3, zones: [] },
+    {
+      xyxy: [759, 219, 1062, 521], class_id: 2, label: "package", confidence: 0.93,
+      track_id: 3, zones: [],
+      obb: [812, 219, 1062, 300, 1010, 521, 759, 440],
+    },
   ],
   zone_counts: { doorway: 1 },
   error: "",
@@ -66,14 +101,24 @@ const demoDetection = {
 
 // A second demo stream so the static build shows what the multi-camera grid
 // looks like. Track ids restart per camera — #1 here is a different object from
-// #1 above, which is exactly the property the backend guarantees.
+// #1 above, which is exactly the property the backend guarantees. The person
+// carries COCO-17 keypoints so the pose skeleton is on show too.
 const demoDetectionBack = {
   frame_id: 41,
   width: 1280,
   height: 720,
   inference_ms: 21.4,
   boxes: [
-    { xyxy: [212, 244, 470, 604], class_id: 3, label: "person", confidence: 0.81, track_id: 1, zones: [] },
+    {
+      xyxy: [212, 244, 470, 604], class_id: 3, label: "person", confidence: 0.81,
+      track_id: 1, zones: [],
+      keypoints: [
+        [341, 268, 0.99], [349, 261, 0.97], [333, 261, 0.97], [361, 264, 0.93], [321, 264, 0.94],
+        [385, 305, 0.96], [297, 305, 0.96], [406, 366, 0.92], [276, 366, 0.91],
+        [420, 424, 0.88], [262, 424, 0.87], [372, 428, 0.94], [310, 428, 0.94],
+        [378, 516, 0.90], [304, 516, 0.90], [382, 598, 0.85], [300, 598, 0.85],
+      ],
+    },
     { xyxy: [820, 188, 1104, 452], class_id: 4, label: "bicycle", confidence: 0.69, track_id: 2, zones: [] },
   ],
   zone_counts: {},
@@ -139,6 +184,9 @@ const state = {
   // Which channel this tab draws: "yolo" (per-frame, tracked) or "vlm"
   // (periodic open-vocab). Both ride the same JPEG underlay.
   channel: "yolo",
+  // Mirrors the server's active detect preset so the task switch can restart
+  // the progress bar without inventing a mode.
+  detectMode: "fast",
   zonesByCamera: {},
   editor: { active: false, draft: [] },
   // Viewer-only display filters (never touch the backend / detector).
@@ -453,6 +501,10 @@ function renderDemoViewer() {
   for (const button of modeButtons) {
     button.disabled = true;
   }
+  // The static demo has no server, so switching heads would silently do nothing.
+  for (const button of taskButtons) {
+    button.disabled = true;
+  }
   if (zoneEditToggle) {
     zoneEditToggle.disabled = true;
   }
@@ -711,7 +763,11 @@ function setChannel(channel) {
 function renderModel(detector) {
   const modelText = detector.loaded ? detector.model : "model not loaded";
   setChip(modelStatus, modelText, detector.last_load_error ? "bad" : detector.loaded ? "good" : "warn");
+  if (detector.mode) {
+    state.detectMode = detector.mode;
+  }
   renderDetectMode(detector.mode);
+  renderDetectTask(detector.task);
 }
 
 function renderDetectMode(mode) {
@@ -742,10 +798,77 @@ async function setDetectMode(mode) {
   }
 }
 
+function renderDetectTask(task) {
+  if (!task) {
+    return;
+  }
+  for (const button of taskButtons) {
+    button.setAttribute("aria-pressed", button.dataset.detectTask === task ? "true" : "false");
+  }
+  // Fast/accurate is a detect-only axis: the other heads have a single
+  // checkpoint each, so the toggle would be a no-op that looks like a control.
+  modeGroup?.classList.toggle("is-disabled", task !== "detect");
+  for (const button of modeButtons) {
+    button.disabled = task !== "detect";
+  }
+}
+
+async function setDetectTask(task) {
+  renderDetectTask(task);
+  // Each task is its own checkpoint, so reuse the model-switch progress bar.
+  modelSwitch.begin(state.detectMode || "fast");
+  setChip(modelStatus, `switching to ${task}…`, "warn");
+  try {
+    const response = await fetch("/api/detector/task", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ task }),
+    });
+    if (response.ok) {
+      const payload = await response.json();
+      renderModel(payload.detector || {});
+    }
+  } catch {
+    // The status poll will reconcile the chips on the next tick.
+  }
+}
+
+// Legend for the raster channels: class swatches for semantic, the metre range
+// for depth. Hidden entirely for the box tasks, which have their own labels.
+function renderRasterLegend(detection) {
+  if (!rasterLegend) {
+    return;
+  }
+  const raster = detection?.raster;
+  if (!raster) {
+    rasterLegend.hidden = true;
+    rasterLegend.textContent = "";
+    return;
+  }
+  rasterLegend.hidden = false;
+  if (raster.kind === "depth") {
+    const low = raster.min_m;
+    const high = raster.max_m;
+    rasterLegend.textContent =
+      low == null ? "深度：無有效值" : `深度 ${low.toFixed(2)}–${high.toFixed(2)} m（亮＝近）`;
+    return;
+  }
+  rasterLegend.textContent = "";
+  for (const entry of (raster.legend || []).slice(0, 12)) {
+    const chip = document.createElement("span");
+    chip.className = "legend-chip";
+    const swatch = document.createElement("i");
+    swatch.style.background = `rgb(${entry.color.join(",")})`;
+    chip.append(swatch, document.createTextNode(entry.label));
+    rasterLegend.append(chip);
+  }
+}
+
 function renderMetrics(detection) {
   frameMetric.textContent = String(detection.frame_id ?? "-");
   boxesMetric.textContent = String(detection.boxes?.length ?? 0);
   inferenceMetric.textContent = `${detection.inference_ms ?? 0} ms`;
+  renderRasterLegend(detection);
 }
 
 // Class chips are built from labels seen on the stream. New labels default to
@@ -820,6 +943,10 @@ function saveSnapshot() {
     const ctx = canvas.getContext("2d");
     const fit = { scale: 1, x: 0, y: 0 };
     ctx.drawImage(pane.image, 0, 0, detection.width, detection.height);
+    // Same layer order as the live overlay, so the PNG matches what is on
+    // screen — including the semantic/depth raster, which is the *entire*
+    // result for those tasks and would otherwise save as a bare frame.
+    drawRaster(ctx, pane, detection, fit);
     drawZones(ctx, pane, detection, fit);
     drawBoxes(ctx, detection, fit);
     canvas.toBlob((blob) => {
@@ -903,6 +1030,9 @@ function drawPane(pane) {
   const detection = activeDetection(pane);
   if (detection && detection.width > 0 && detection.height > 0) {
     const fit = fitContain(width, height, detection.width, detection.height);
+    // Semantic/depth rasters sit under everything else: they cover the whole
+    // frame, so drawing them last would bury the boxes and zones.
+    drawRaster(ctx, pane, detection, fit);
     // Zones and the zone-drawing draft belong to the YOLO channel only (VLM
     // has no confidence/tracking to feed them).
     if (yoloChannel) {
@@ -913,6 +1043,44 @@ function drawPane(pane) {
       drawDraft(ctx, detection, fit);
     }
   }
+}
+
+// Decoding a fresh data URL every frame would burn the frame budget, so each
+// pane keeps the decoded Image until the payload's PNG actually changes. The
+// rAF loop redraws continuously, so a frame decoded a beat late simply appears
+// on the next pass rather than needing a load callback.
+function rasterImage(pane, dataUrl) {
+  if (pane.rasterSrc !== dataUrl) {
+    const image = new Image();
+    image.src = dataUrl;
+    pane.rasterSrc = dataUrl;
+    pane.rasterImage = image;
+  }
+  return pane.rasterImage;
+}
+
+function drawRaster(ctx, pane, detection, fit) {
+  const raster = detection.raster;
+  if (!raster || !raster.png) {
+    return;
+  }
+  const image = rasterImage(pane, raster.png);
+  if (!image.complete || !image.naturalWidth) {
+    return;
+  }
+  ctx.save();
+  ctx.globalAlpha = RASTER_ALPHA;
+  // The class map is nearest-sampled server-side so its palette stays exact;
+  // smoothing it back up here would invent colours between two classes.
+  ctx.imageSmoothingEnabled = raster.kind === "depth";
+  ctx.drawImage(
+    image,
+    fit.x,
+    fit.y,
+    detection.width * fit.scale,
+    detection.height * fit.scale,
+  );
+  ctx.restore();
 }
 
 // Viewer-side visibility: hidden classes and a min-confidence floor are pure
@@ -939,6 +1107,10 @@ function drawBoxes(ctx, detection, fit) {
     const top = fit.y + y1 * fit.scale;
     const right = fit.x + x2 * fit.scale;
     const bottom = fit.y + y2 * fit.scale;
+
+    // Segmentation contour, drawn before the outline so the label stays legible
+    // on top of the tint.
+    drawMask(ctx, box, fit, color);
     // When the second-stage classifier named a species, show that as the
     // primary label (圖鑑); otherwise fall back to the detection class. A
     // tracker id (when present) is prefixed so an object is followable.
@@ -950,14 +1122,97 @@ function drawBoxes(ctx, detection, fit) {
 
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
-    ctx.strokeRect(left, top, right - left, bottom - top);
+    if (box.obb && box.obb.length === 8) {
+      // Rotated detection: outline the real quad. The axis-aligned xyxy is still
+      // what positions the label (and what zones/alerts upstream reason about).
+      ctx.beginPath();
+      for (let i = 0; i < 8; i += 2) {
+        const px = fit.x + box.obb[i] * fit.scale;
+        const py = fit.y + box.obb[i + 1] * fit.scale;
+        if (i === 0) {
+          ctx.moveTo(px, py);
+        } else {
+          ctx.lineTo(px, py);
+        }
+      }
+      ctx.closePath();
+      ctx.stroke();
+    } else {
+      ctx.strokeRect(left, top, right - left, bottom - top);
+    }
+
+    drawKeypoints(ctx, box, fit, color);
 
     const textWidth = ctx.measureText(label).width + 12;
     const textTop = Math.max(0, top - 24);
+    ctx.fillStyle = color;
     ctx.fillRect(left, textTop, textWidth, 22);
     ctx.fillStyle = "#10100f";
     ctx.fillText(label, left + 6, textTop + 3);
   }
+}
+
+function drawMask(ctx, box, fit, color) {
+  const mask = box.mask;
+  if (!mask || mask.length < 3) {
+    return;
+  }
+  ctx.save();
+  ctx.beginPath();
+  for (let i = 0; i < mask.length; i += 1) {
+    const px = fit.x + mask[i][0] * fit.scale;
+    const py = fit.y + mask[i][1] * fit.scale;
+    if (i === 0) {
+      ctx.moveTo(px, py);
+    } else {
+      ctx.lineTo(px, py);
+    }
+  }
+  ctx.closePath();
+  ctx.fillStyle = withAlpha(color, 0.3);
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawKeypoints(ctx, box, fit, color) {
+  const points = box.keypoints;
+  if (!points || !points.length) {
+    return;
+  }
+  const toStage = (point) => [fit.x + point[0] * fit.scale, fit.y + point[1] * fit.scale];
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = color;
+  // Limbs first, joints on top, so a dot is never half-hidden under a bone.
+  // A keypoint the model could not see comes back at (0, 0) with ~0 confidence;
+  // drawing those would rope every occluded joint back to the frame corner.
+  for (const [from, to] of POSE_SKELETON) {
+    const a = points[from];
+    const b = points[to];
+    if (!a || !b || a[2] < KEYPOINT_MIN_CONF || b[2] < KEYPOINT_MIN_CONF) {
+      continue;
+    }
+    const [ax, ay] = toStage(a);
+    const [bx, by] = toStage(b);
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+  }
+  ctx.fillStyle = color;
+  for (const point of points) {
+    if (point[2] < KEYPOINT_MIN_CONF) {
+      continue;
+    }
+    const [px, py] = toStage(point);
+    ctx.beginPath();
+    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function fitContain(stageWidth, stageHeight, sourceWidth, sourceHeight) {
@@ -1281,6 +1536,9 @@ zoneClearButton?.addEventListener("click", () => {
   updateDraftHint();
 });
 stage.addEventListener("click", onStageClick);
+for (const button of taskButtons) {
+  button.addEventListener("click", () => setDetectTask(button.dataset.detectTask));
+}
 
 viewerMinConf?.addEventListener("input", (event) => setViewerMinConf(event.target.value));
 saveFrameButton?.addEventListener("click", saveSnapshot);

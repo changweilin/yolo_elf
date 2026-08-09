@@ -13,6 +13,15 @@ param(
     # Multi-object tracking (stable per-object ids across frames). Defaults on.
     [ValidateSet("on", "off")]
     [string]$Track,
+    # Tracker config. Ultralytics ships bytetrack / botsort / tracktrack /
+    # fasttrack / ocsort / deepocsort; a custom .yaml path also works, so this is
+    # deliberately not a ValidateSet.
+    [string]$Tracker,
+    # NMS-free (one-to-one) head on YOLO26 / YOLOv10 weights. "auto" = whatever
+    # the checkpoint ships with.
+    [ValidateSet("auto", "on", "off")]
+    [string]$End2End,
+    [int]$MaxDet,
     [switch]$Reload
 )
 
@@ -45,6 +54,9 @@ if ($PSBoundParameters.ContainsKey("Classes"))       { $env:YOLO_CLASSES = $Clas
 if ($PSBoundParameters.ContainsKey("ConfThresh"))    { $env:CONF_THRESH = [string]$ConfThresh }
 if ($PSBoundParameters.ContainsKey("ImgSize"))       { $env:IMG_SIZE = [string]$ImgSize }
 if ($PSBoundParameters.ContainsKey("Track"))         { $env:YOLO_TRACK = $Track }
+if ($PSBoundParameters.ContainsKey("Tracker"))       { $env:YOLO_TRACKER = $Tracker }
+if ($PSBoundParameters.ContainsKey("End2End"))       { $env:YOLO_END2END = $End2End }
+if ($PSBoundParameters.ContainsKey("MaxDet"))        { $env:YOLO_MAX_DET = [string]$MaxDet }
 
 $UvicornArgs = @("-m", "uvicorn", "app.main:app", "--host", $HostName, "--port", [string]$Port)
 if ($Reload) {

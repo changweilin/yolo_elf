@@ -13,8 +13,50 @@ os.environ.setdefault("YOLO_CONFIG_DIR", str(ULTRALYTICS_DIR))
 ULTRALYTICS_DIR.mkdir(exist_ok=True)
 
 # Detection presets the runtime can switch between. "fast" favours speed and
-# uses `yolo_model`; "accurate" swaps in the larger `yolo_model_accurate`.
+# uses `yolo_model`; "accurate" swaps in the larger `yolo_model_accurate`. This
+# axis only applies to the "detect" task — the other heads have one model each.
 DETECT_MODES = ("fast", "accurate")
+
+# Switchable model heads. "detect" is the historical path and stays the default,
+# so an unset YOLO_TASK behaves exactly like every previous release.
+#
+# "openvocab" is not an Ultralytics task — it is the YOLOE-26 segmentation model
+# driven by YOLO_CLASSES text prompts. It gets its own entry because from the
+# viewer's point of view it is another channel to switch to, and because it needs
+# a different checkpoint family than plain "segment".
+DETECT_TASKS = ("detect", "segment", "pose", "obb", "openvocab", "semantic", "depth")
+
+# Tasks whose results carry boxes. Only these can be tracked (Ultralytics rejects
+# `mode=track` for anything else) and only these feed zones / alerts / history —
+# every one of those is defined in terms of a box with a `track_id`.
+BOX_TASKS = ("detect", "segment", "pose", "obb", "openvocab")
+
+# Tasks that emit one full-frame raster instead of boxes. They ride a separate
+# payload field, never the box list, so the downstream box consumers simply see
+# an empty frame rather than being fed something they cannot interpret.
+RASTER_TASKS = ("semantic", "depth")
+
+# Env var holding each task's model name. "detect" is absent: it keeps the
+# original two-preset YOLO_MODEL / YOLO_MODEL_ACCURATE pair.
+TASK_MODEL_ENV = {
+    "segment": ("YOLO_MODEL_SEGMENT", "yolo26s-seg.pt"),
+    "pose": ("YOLO_MODEL_POSE", "yolo26s-pose.pt"),
+    "obb": ("YOLO_MODEL_OBB", "yolo26s-obb.pt"),
+    # YOLOE-26 is a segmentation checkpoint; the "-pf" variants are prompt-free.
+    "openvocab": ("YOLO_MODEL_OPENVOCAB", "yoloe-26s-seg.pt"),
+    "semantic": ("YOLO_MODEL_SEMANTIC", "yolo26s-sem.pt"),
+    "depth": ("YOLO_MODEL_DEPTH", "yolo26s-depth.pt"),
+}
+
+# NMS-free (end-to-end) head selection for models that ship one — YOLO26 and
+# YOLOv10. "auto" leaves the checkpoint's own default alone, which is the only
+# value that behaves identically on every model generation; "on"/"off" force the
+# one-to-one / one-to-many head. Ignored by models without an end2end head.
+END2END_MODES = ("auto", "on", "off")
+
+# What each END2END_MODES entry means to Ultralytics' `end2end` predict arg:
+# None = don't pass it at all (leave the checkpoint alone).
+END2END_FLAGS: dict[str, bool | None] = {"auto": None, "on": True, "off": False}
 
 # The implicit single-camera identity. With CAMERAS unset the registry holds
 # exactly one channel under this id, so every camera_id-aware call site keeps
@@ -141,13 +183,22 @@ class Settings:
     host: str
     port: int
     detect_mode: str
+    detect_task: str
     yolo_model: str
     yolo_model_accurate: str
+    # One model name per non-detect task, as (task, model) pairs. A tuple rather
+    # than a dict so `replace(settings, ...)` copies stay genuinely independent —
+    # a shared mutable dict would alias across every copy.
+    task_models: tuple[tuple[str, str], ...]
+    # Upper bound on the long edge of an encoded semantic/depth raster.
+    raster_max_size: int
     yolo_classes: tuple[str, ...]
     yolo_device: str
     yolo_half: bool
     yolo_track: bool
     yolo_tracker: str
+    yolo_end2end: str
+    yolo_max_det: int
     yolo_export: str
     yolo_warmup: bool
     yolo_warmup_runs: int
@@ -200,6 +251,10 @@ class Settings:
     static_dir: Path
 
     @property
+    def task_model_map(self) -> dict[str, str]:
+        return dict(self.task_models)
+
+    @property
     def camera_ids(self) -> tuple[str, ...]:
         return tuple(camera_id for camera_id, _ in self.cameras)
 
@@ -219,17 +274,41 @@ def get_settings() -> Settings:
         host=os.getenv("HOST", "0.0.0.0"),
         port=_bounded_int_env("PORT", 8766, 1, 65535),
         detect_mode=_choice_env("DETECT_MODE", "fast", DETECT_MODES),
-        yolo_model=os.getenv("YOLO_MODEL", "yolov8s.pt"),
-        yolo_model_accurate=os.getenv("YOLO_MODEL_ACCURATE", "yolov8x.pt"),
+        # Which head runs. "detect" keeps the original box-only pipeline; the
+        # other entries swap in a task-specific checkpoint and add their own
+        # payload fields. Switchable at runtime from the viewer's icon row.
+        detect_task=_choice_env("DETECT_TASK", "detect", DETECT_TASKS),
+        yolo_model=os.getenv("YOLO_MODEL", "yolo26s.pt"),
+        yolo_model_accurate=os.getenv("YOLO_MODEL_ACCURATE", "yolo26x.pt"),
+        task_models=tuple(
+            (task, os.getenv(env_name, default).strip() or default)
+            for task, (env_name, default) in TASK_MODEL_ENV.items()
+        ),
+        # Semantic/depth rasters are downscaled to this long edge before being
+        # PNG-encoded onto the payload. 256 keeps a frame in the low single-digit
+        # KB; the overlay is stretched back over the frame client-side, so this
+        # trades overlay crispness against bandwidth on every single frame.
+        raster_max_size=_bounded_int_env("RASTER_MAX_SIZE", 256, 32, 1024),
         yolo_classes=_list_env("YOLO_CLASSES"),
         yolo_device=os.getenv("YOLO_DEVICE", "auto"),
         yolo_half=_bool_env("YOLO_HALF", True),
         # Multi-object tracking: assign a stable `track_id` to each box across
         # frames via Ultralytics' built-in tracker. Off falls back to stateless
-        # per-frame detection. YOLO_TRACKER picks the tracker config (bytetrack
-        # is lighter; botsort.yaml adds ReID at higher cost).
+        # per-frame detection. YOLO_TRACKER picks the tracker config; ultralytics
+        # 8.4 ships six (bytetrack / botsort / tracktrack / fasttrack / ocsort /
+        # deepocsort). Left free-form so a custom tracker .yaml still resolves.
         yolo_track=_bool_env("YOLO_TRACK", True),
         yolo_tracker=os.getenv("YOLO_TRACKER", "bytetrack.yaml").strip() or "bytetrack.yaml",
+        # YOLO26 / YOLOv10 ship a one-to-one head that emits already-deduplicated
+        # boxes, so no NMS runs and the `iou` threshold stops mattering. "auto"
+        # keeps whatever the checkpoint was built with — the only setting that is
+        # bit-for-bit the old behaviour on a YOLOv8/v11 model, which has no such
+        # head and ignores the argument entirely.
+        yolo_end2end=_choice_env("YOLO_END2END", "auto", END2END_MODES),
+        # Hard cap on boxes per frame. 300 mirrors the Ultralytics default, and is
+        # also the floor the end2end head is pinned to internally, so lowering it
+        # only truncates the (already sorted) output — it never speeds up the head.
+        yolo_max_det=_bounded_int_env("YOLO_MAX_DET", 300, 1, 1000),
         # Inference acceleration. Empty = load the model name as-is (a `.pt`, or a
         # pre-exported `.engine`/`.onnx` you point YOLO_MODEL at). "engine"/"onnx"
         # auto-export a `.pt` on first load and load the product instead. The
