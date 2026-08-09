@@ -2,7 +2,11 @@ fastapi>=0.115
 uvicorn[standard]>=0.34
 numpy>=1.26
 pillow>=10
-ultralytics>=8.3
+# 8.4.0 brought YOLO26 (yolo26*.pt weights, the `end2end` predict arg, the
+# tracktrack/fasttrack/ocsort/deepocsort trackers). 8.4.104 is the real floor:
+# the depth task needs `DepthModel`, and loading yolo26*-depth.pt on anything
+# older fails with "Can't get attribute 'DepthModel'".
+ultralytics>=8.4.104
 # Optional VLM (Florence-2) channel. transformers loads the model; timm + einops
 # are imported by Florence-2's trust_remote_code modelling code.
 transformers>=4.44

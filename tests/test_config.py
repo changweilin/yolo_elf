@@ -6,6 +6,14 @@ from app.config import get_settings
 SETTINGS_ENV = [
     "PORT",
     "DETECT_MODE",
+    "DETECT_TASK",
+    "YOLO_MODEL_SEGMENT",
+    "YOLO_MODEL_POSE",
+    "YOLO_MODEL_OBB",
+    "YOLO_MODEL_OPENVOCAB",
+    "YOLO_MODEL_SEMANTIC",
+    "YOLO_MODEL_DEPTH",
+    "RASTER_MAX_SIZE",
     "YOLO_MODEL",
     "YOLO_MODEL_ACCURATE",
     "YOLO_CLASSES",
@@ -13,6 +21,8 @@ SETTINGS_ENV = [
     "YOLO_HALF",
     "YOLO_TRACK",
     "YOLO_TRACKER",
+    "YOLO_END2END",
+    "YOLO_MAX_DET",
     "YOLO_EXPORT",
     "YOLO_WARMUP",
     "YOLO_WARMUP_RUNS",
@@ -57,12 +67,16 @@ def test_default_settings_prioritize_detection_recall(monkeypatch):
     settings = get_settings()
 
     assert settings.detect_mode == "fast"
-    assert settings.yolo_model == "yolov8s.pt"
-    assert settings.yolo_model_accurate == "yolov8x.pt"
+    assert settings.yolo_model == "yolo26s.pt"
+    assert settings.yolo_model_accurate == "yolo26x.pt"
     assert settings.yolo_classes == ()
     assert settings.yolo_half is True
     assert settings.yolo_track is True
     assert settings.yolo_tracker == "bytetrack.yaml"
+    # "auto" leaves the checkpoint's own head alone — the only value that is
+    # bit-for-bit the pre-YOLO26 behaviour on every model generation.
+    assert settings.yolo_end2end == "auto"
+    assert settings.yolo_max_det == 300
     assert settings.yolo_export == ""
     # The VLM channel is opt-in and off by default.
     assert settings.vlm_enabled is False
@@ -128,7 +142,9 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     monkeypatch.setenv("CLASSIFIER_MAX_BOXES", "3")
     monkeypatch.setenv("YOLO_HALF", "true")
     monkeypatch.setenv("YOLO_TRACK", "off")
-    monkeypatch.setenv("YOLO_TRACKER", "botsort.yaml")
+    monkeypatch.setenv("YOLO_TRACKER", "tracktrack.yaml")
+    monkeypatch.setenv("YOLO_END2END", "ON")
+    monkeypatch.setenv("YOLO_MAX_DET", "50")
     monkeypatch.setenv("YOLO_WARMUP", "1")
     monkeypatch.setenv("YOLO_WARMUP_RUNS", "2")
     monkeypatch.setenv("FRAME_FPS", "30")
@@ -154,7 +170,9 @@ def test_get_settings_accepts_valid_overrides(monkeypatch):
     assert settings.classifier_max_boxes == 3
     assert settings.yolo_half is True
     assert settings.yolo_track is False
-    assert settings.yolo_tracker == "botsort.yaml"
+    assert settings.yolo_tracker == "tracktrack.yaml"
+    assert settings.yolo_end2end == "on"
+    assert settings.yolo_max_det == 50
     assert settings.yolo_warmup is True
     assert settings.yolo_warmup_runs == 2
     assert settings.frame_fps == 30
@@ -188,6 +206,58 @@ def test_yolo_export_accepts_known_formats(monkeypatch, value):
     assert get_settings().yolo_export == value.lower()
 
 
+def test_task_defaults_keep_the_original_detect_pipeline(monkeypatch):
+    clear_settings_env(monkeypatch)
+
+    settings = get_settings()
+
+    # An unset DETECT_TASK must behave exactly like every previous release.
+    assert settings.detect_task == "detect"
+    assert settings.raster_max_size == 256
+    assert settings.task_model_map == {
+        "segment": "yolo26s-seg.pt",
+        "pose": "yolo26s-pose.pt",
+        "obb": "yolo26s-obb.pt",
+        "openvocab": "yoloe-26s-seg.pt",
+        "semantic": "yolo26s-sem.pt",
+        "depth": "yolo26s-depth.pt",
+    }
+
+
+def test_task_models_are_overridable_per_task(monkeypatch):
+    clear_settings_env(monkeypatch)
+    monkeypatch.setenv("DETECT_TASK", "POSE")
+    monkeypatch.setenv("YOLO_MODEL_POSE", " yolo26x-pose.pt ")
+    monkeypatch.setenv("YOLO_MODEL_DEPTH", "")  # blank falls back to the default
+
+    settings = get_settings()
+
+    assert settings.detect_task == "pose"
+    assert settings.task_model_map["pose"] == "yolo26x-pose.pt"
+    assert settings.task_model_map["depth"] == "yolo26s-depth.pt"
+
+
+def test_task_models_do_not_alias_across_replaced_copies(monkeypatch):
+    # `replace()` is used by the benchmark and the tests; a shared mutable dict
+    # here would make one copy's edit leak into every other.
+    from dataclasses import replace
+
+    clear_settings_env(monkeypatch)
+    original = get_settings()
+    copy = replace(original, task_models=(("pose", "other.pt"),))
+
+    assert original.task_model_map["pose"] == "yolo26s-pose.pt"
+    assert copy.task_model_map == {"pose": "other.pt"}
+
+
+@pytest.mark.parametrize("value", ["auto", "on", "off", " OFF "])
+def test_yolo_end2end_accepts_known_modes(monkeypatch, value):
+    clear_settings_env(monkeypatch)
+    monkeypatch.setenv("YOLO_END2END", value)
+
+    assert get_settings().yolo_end2end == value.strip().lower()
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     [
@@ -196,6 +266,12 @@ def test_yolo_export_accepts_known_formats(monkeypatch, value):
         ("YOLO_HALF", "maybe"),
         ("YOLO_TRACK", "maybe"),
         ("YOLO_EXPORT", "trt"),
+        ("DETECT_TASK", "sorcery"),
+        ("RASTER_MAX_SIZE", "16"),
+        ("RASTER_MAX_SIZE", "2048"),
+        ("YOLO_END2END", "yes"),
+        ("YOLO_MAX_DET", "0"),
+        ("YOLO_MAX_DET", "1001"),
         ("YOLO_WARMUP", "warm"),
         ("YOLO_WARMUP_RUNS", "0"),
         ("CONF_THRESH", "1.5"),

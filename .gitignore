@@ -13,6 +13,9 @@ dist/
 *.pt
 *.onnx
 *.engine
+# YOLOE (openvocab task) downloads its CLIP text encoder next to the weights on
+# first use. Named explicitly rather than ignoring *.ts, which is TypeScript.
+mobileclip2_*.ts
 *.mp4
 *.avi
 *.mov

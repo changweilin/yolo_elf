@@ -27,6 +27,9 @@ def _sample_status():
             "mode": "fast",
             "model": "yolov8s.pt",
             "resolved_device": "cpu",
+            "end2end": "auto",
+            "end2end_capable": True,
+            "max_det": 300,
         },
         "recordings": {"recordings_saved": 4, "bytes_saved": 999},
         "remote_storage": {
@@ -100,9 +103,19 @@ def test_detector_info_carries_low_cardinality_labels():
     assert 'mode="fast"' in info
     assert 'model="yolov8s.pt"' in info
     assert 'device="cpu"' in info
+    assert 'end2end="auto"' in info
     assert info.endswith(" 1")
     # track_id must never become a label (cardinality guard)
     assert "track_id" not in text
+
+
+def test_end2end_and_max_det_are_exposed_as_gauges():
+    text = render_metrics(_sample_status())
+    assert _value_for(text, "yolo_elf_detector_max_det") == "300"
+    assert _value_for(text, "yolo_elf_detector_end2end_capable") == "1"
+    # Not-yet-loaded weights report unknown as 0, matching detector_loaded.
+    unloaded = render_metrics({"detector": {"end2end_capable": None}})
+    assert _value_for(unloaded, "yolo_elf_detector_end2end_capable") == "0"
 
 
 def test_missing_sections_default_to_zero():

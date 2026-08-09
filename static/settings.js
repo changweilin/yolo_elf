@@ -11,6 +11,9 @@ const classifierMinConfInput = document.querySelector("#classifierMinConfInput")
 const classifierMaxBoxesInput = document.querySelector("#classifierMaxBoxesInput");
 const confInput = document.querySelector("#confInput");
 const imgSizeInput = document.querySelector("#imgSizeInput");
+const maxDetInput = document.querySelector("#maxDetInput");
+const end2endGroup = document.querySelector("#end2endGroup");
+const end2endButtons = Array.from(end2endGroup.querySelectorAll("[data-end2end]"));
 const saveButton = document.querySelector("#saveButton");
 const resetButton = document.querySelector("#resetButton");
 
@@ -24,7 +27,7 @@ const modelSwitch = createModelSwitch({
   },
 });
 
-const state = { mode: "fast" };
+const state = { mode: "fast", end2end: "auto" };
 
 function setChip(text, tone) {
   stateChip.textContent = text;
@@ -51,8 +54,18 @@ function renderMode(mode) {
   }
 }
 
+function renderEnd2End(mode) {
+  if (mode === "auto" || mode === "on" || mode === "off") {
+    state.end2end = mode;
+  }
+  for (const button of end2endButtons) {
+    button.setAttribute("aria-pressed", button.dataset.end2end === state.end2end ? "true" : "false");
+  }
+}
+
 function populate(detector) {
   renderMode(detector.mode);
+  renderEnd2End(detector.end2end);
   const models = detector.models || {};
   fastModelInput.value = models.fast ?? "";
   accurateModelInput.value = models.accurate ?? "";
@@ -62,6 +75,7 @@ function populate(detector) {
   classifierMaxBoxesInput.value = detector.classifier_max_boxes ?? "";
   confInput.value = detector.conf_thresh ?? "";
   imgSizeInput.value = detector.img_size ?? "";
+  maxDetInput.value = detector.max_det ?? "";
 }
 
 function buildPayload() {
@@ -77,6 +91,8 @@ function buildPayload() {
       classifierMaxBoxesInput.value === "" ? null : Number(classifierMaxBoxesInput.value),
     conf_thresh: confInput.value === "" ? null : Number(confInput.value),
     img_size: imgSizeInput.value === "" ? null : Number(imgSizeInput.value),
+    max_det: maxDetInput.value === "" ? null : Number(maxDetInput.value),
+    end2end: state.end2end,
   };
 }
 
@@ -129,6 +145,9 @@ async function saveConfig(event) {
 
 for (const button of modeButtons) {
   button.addEventListener("click", () => renderMode(button.dataset.detectMode));
+}
+for (const button of end2endButtons) {
+  button.addEventListener("click", () => renderEnd2End(button.dataset.end2end));
 }
 form.addEventListener("submit", saveConfig);
 resetButton.addEventListener("click", loadConfig);

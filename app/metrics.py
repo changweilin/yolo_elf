@@ -125,6 +125,13 @@ def render_metrics(status: dict[str, Any]) -> str:
     emit("detector_warmed_up", "gauge", "1 if the model has completed warmup, else 0.", detector.get("warmed_up"))
     emit("detector_conf_threshold", "gauge", "Active detection confidence threshold.", detector.get("conf_thresh"))
     emit("detector_img_size", "gauge", "Active inference image size.", detector.get("img_size"))
+    emit("detector_max_det", "gauge", "Maximum detections kept per frame.", detector.get("max_det"))
+    emit(
+        "detector_end2end_capable",
+        "gauge",
+        "1 if the loaded weights have an NMS-free (one-to-one) head, else 0.",
+        detector.get("end2end_capable"),
+    )
     emit(
         "detector_info",
         "gauge",
@@ -134,6 +141,7 @@ def render_metrics(status: dict[str, Any]) -> str:
             "mode": detector.get("mode") or "",
             "model": detector.get("model") or "",
             "device": "" if detector.get("resolved_device") is None else detector.get("resolved_device"),
+            "end2end": detector.get("end2end") or "",
         },
     )
 

@@ -4,23 +4,32 @@ from pathlib import Path
 
 import pytest
 
-from app.config import get_settings
+from app.config import DETECT_TASKS, get_settings
 from app.detector import (
     YoloDetector,
     clamp_xyxy,
     detection_error_payload,
     device_supports_half,
+    model_supports_end2end,
 )
+
+
+# Cache key for the default preset. Model caches are keyed by task (with the
+# fast/accurate split kept only for "detect"), not by mode alone.
+FAST = "detect:fast"
 
 
 def _detector(monkeypatch):
     for name in (
         "DETECT_MODE",
+        "DETECT_TASK",
         "YOLO_MODEL",
         "YOLO_MODEL_ACCURATE",
         "YOLO_CLASSES",
         "YOLO_TRACK",
         "YOLO_TRACKER",
+        "YOLO_END2END",
+        "YOLO_MAX_DET",
         "YOLO_EXPORT",
         "CLASSIFIER_MODEL",
         "CLASSIFIER_MIN_CONF",
@@ -42,6 +51,18 @@ def test_export_target_is_a_pure_path_decision():
     assert target("yolov8s.onnx", "engine") is None
     # unknown format -> no export
     assert target("yolov8s.pt", "trt") is None
+
+
+def test_export_target_marks_a_forced_end2end_head(monkeypatch):
+    target = YoloDetector._export_target
+    # "auto" keeps the original filename layout, byte-for-byte.
+    assert target("yolo26s.pt", "onnx", "auto") == Path("yolo26s.onnx")
+    # A forced head gets its own artifact so flipping YOLO_END2END re-exports
+    # instead of reusing a cache built with the other head.
+    assert target("yolo26s.pt", "onnx", "on") == Path("yolo26s-e2eon.onnx")
+    assert target("yolo26s.pt", "engine", "off") == Path("yolo26s-e2eoff.engine")
+    # The directory is preserved and the marker never leaks into it.
+    assert target("weights/yolo26x.pt", "onnx", "on") == Path("weights/yolo26x-e2eon.onnx")
 
 
 def test_resolve_model_source_passthrough_when_disabled(monkeypatch):
@@ -96,6 +117,17 @@ class _FakeClosedModel:
         self.names = {0: "person"}
 
 
+class _FakeEnd2EndModel:
+    """A YOLO26-style wrapper: the flag lives on the inner nn.Module."""
+
+    class _Inner:
+        end2end = True
+
+    def __init__(self):
+        self.names = {0: "person"}
+        self.model = self._Inner()
+
+
 class _FakeScalar:
     """Mimics the box-tensor cell chain: ``.detach().cpu().item()/.tolist()``."""
 
@@ -126,8 +158,52 @@ class _FakeResultBox:
 
 
 class _FakeDetectResult:
-    def __init__(self, boxes):
+    def __init__(self, boxes, masks=None, keypoints=None):
         self.boxes = boxes
+        self.masks = masks
+        self.keypoints = keypoints
+
+
+class _FakeTensor:
+    """Mimics a torch tensor's ``.detach().cpu().tolist()`` chain."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def tolist(self):
+        return self._value
+
+
+class _FakeMasks:
+    def __init__(self, polygons):
+        self.xy = polygons
+
+
+class _FakeKeypoints:
+    def __init__(self, xy, conf=None):
+        self.xy = _FakeTensor(xy)
+        self.conf = None if conf is None else _FakeTensor(conf)
+
+
+class _FakeObb:
+    def __init__(self, quads, aligned, classes, confidences, ids=None):
+        self.xyxyxyxy = _FakeTensor(quads)
+        self.xyxy = _FakeTensor(aligned)
+        self.cls = _FakeTensor(classes)
+        self.conf = _FakeTensor(confidences)
+        self.id = None if ids is None else _FakeTensor(ids)
+
+
+class _FakeObbResult:
+    def __init__(self, obb):
+        self.obb = obb
+        self.boxes = None
 
 
 class _FakeRoutingModel:
@@ -181,9 +257,9 @@ class _FakeClassifier:
 def test_detector_defaults_to_fast_mode(monkeypatch):
     status = _detector(monkeypatch).status()
     assert status["mode"] == "fast"
-    assert status["model"] == "yolov8s.pt"
+    assert status["model"] == "yolo26s.pt"
     assert status["available_modes"] == ["fast", "accurate"]
-    assert status["models"] == {"fast": "yolov8s.pt", "accurate": "yolov8x.pt"}
+    assert status["models"] == {"fast": "yolo26s.pt", "accurate": "yolo26x.pt"}
     assert status["configured_classes"] == []
     assert status["open_vocabulary"] is False
     assert status["loaded"] is False
@@ -225,7 +301,7 @@ def test_set_mode_switches_active_model(monkeypatch):
     assert detector.set_mode("accurate") == "accurate"
     status = detector.status()
     assert status["mode"] == "accurate"
-    assert status["model"] == "yolov8x.pt"
+    assert status["model"] == "yolo26x.pt"
 
 
 def test_set_mode_rejects_unknown_mode(monkeypatch):
@@ -254,20 +330,20 @@ def test_update_config_applies_conf_img_and_models(monkeypatch):
 
 def test_update_config_swapping_model_drops_cached_weights(monkeypatch):
     detector = _detector(monkeypatch)
-    detector._models["fast"] = _FakeClosedModel()
-    detector._names_by_mode["fast"] = {0: "person"}
-    detector._open_vocab_applied["fast"] = False
+    detector._models[FAST] = _FakeClosedModel()
+    detector._names_by_preset[FAST] = {0: "person"}
+    detector._open_vocab_applied[FAST] = False
 
     detector.update_config({"fast_model": "best.pt"})
 
-    assert "fast" not in detector._models
-    assert "fast" not in detector._names_by_mode
+    assert FAST not in detector._models
+    assert FAST not in detector._names_by_preset
 
 
 def test_update_config_reapplies_classes_to_loaded_world_model(monkeypatch):
     detector = _detector(monkeypatch)
     model = _FakeWorldModel()
-    detector._models["fast"] = model
+    detector._models[FAST] = model
 
     status = detector.update_config({"classes": "cat, dog"})
 
@@ -428,6 +504,136 @@ def test_classify_boxes_skips_degenerate_crops(monkeypatch):
     assert classifier.received is None
 
 
+def test_status_reports_end2end_defaults(monkeypatch):
+    status = _detector(monkeypatch).status()
+    assert status["end2end"] == "auto"
+    assert status["max_det"] == 300
+    # Unknown until the weights are actually loaded.
+    assert status["end2end_capable"] is None
+
+
+def test_status_reports_end2end_capability_of_loaded_model(monkeypatch):
+    detector = _detector(monkeypatch)
+
+    detector._models[FAST] = _FakeEnd2EndModel()
+    detector._end2end_native[FAST] = True
+    assert detector.status()["end2end_capable"] is True
+
+    # A closed-set YOLOv8-era model has no one-to-one head.
+    detector._models[FAST] = _FakeClosedModel()
+    detector._end2end_native[FAST] = False
+    assert detector.status()["end2end_capable"] is False
+
+
+def test_end2end_capability_survives_a_forced_off_prediction(monkeypatch):
+    """Regression: `end2end=False` at predict time overwrites `model.end2end`.
+
+    Reading the attribute back after inference reported "this model has no
+    NMS-free head" for a YOLO26 checkpoint that plainly does, so the capability
+    is sampled once at load time instead.
+    """
+    detector = _detector(monkeypatch)
+    model = _FakeEnd2EndModel()
+    detector._models[FAST] = model
+    detector._end2end_native[FAST] = model_supports_end2end(model)
+
+    # Ultralytics mutates the inner module when the kwarg is forced.
+    detector.update_config({"end2end": "off"})
+    model.model.end2end = False
+
+    assert detector.status()["end2end_capable"] is True
+
+
+def test_swapping_the_model_forgets_its_end2end_capability(monkeypatch):
+    detector = _detector(monkeypatch)
+    detector._models[FAST] = _FakeEnd2EndModel()
+    detector._end2end_native[FAST] = True
+
+    detector.update_config({"fast_model": "yolov8s.pt"})
+
+    assert FAST not in detector._end2end_native
+    assert detector.status()["end2end_capable"] is None
+
+
+def test_update_config_sets_end2end_and_max_det(monkeypatch):
+    detector = _detector(monkeypatch)
+    status = detector.update_config({"end2end": "OFF", "max_det": 25})
+    assert status["end2end"] == "off"
+    assert status["max_det"] == 25
+
+
+@pytest.mark.parametrize(
+    "payload", [{"end2end": "yes"}, {"end2end": 1}, {"max_det": 0}, {"max_det": 1001},
+                {"max_det": "many"}]
+)
+def test_update_config_rejects_invalid_end2end_and_max_det(monkeypatch, payload):
+    detector = _detector(monkeypatch)
+    with pytest.raises(ValueError):
+        detector.update_config(payload)
+
+
+def test_switching_end2end_keeps_cached_weights_when_export_is_off(monkeypatch):
+    # Without export the head is a per-call predict kwarg, so there is nothing to
+    # reload — dropping the weights would be a pointless stall.
+    detector = _detector(monkeypatch)
+    detector._models[FAST] = _FakeClosedModel()
+
+    detector.update_config({"end2end": "on"})
+
+    assert FAST in detector._models
+
+
+def test_switching_end2end_drops_cached_weights_when_exporting(monkeypatch):
+    # With export on, the head is baked into the artifact and each head has its
+    # own filename, so the cache must go or the old artifact keeps serving.
+    monkeypatch.setenv("YOLO_EXPORT", "onnx")
+    detector = YoloDetector(get_settings())
+    detector._models[FAST] = _FakeClosedModel()
+    detector._loaded_sources[FAST] = "yolo26s.onnx"
+    detector._tracker_models[(FAST, "cam2")] = _FakeClosedModel()
+
+    detector.update_config({"end2end": "off"})
+
+    assert detector._models == {}
+    assert detector._loaded_sources == {}
+    assert detector._tracker_models == {}
+    # A no-op write must not throw the weights away.
+    detector._models[FAST] = _FakeClosedModel()
+    detector.update_config({"end2end": "off"})
+    assert FAST in detector._models
+
+
+def test_prediction_kwargs_omit_end2end_on_auto(monkeypatch):
+    # "auto" must not pass the key at all: `end2end` only exists from ultralytics
+    # 8.4, and an unknown predict key is a hard error there.
+    kwargs = _detector(monkeypatch)._prediction_kwargs("src")
+    assert "end2end" not in kwargs
+    assert kwargs["max_det"] == 300
+
+
+@pytest.mark.parametrize(("mode", "expected"), [("on", True), ("off", False)])
+def test_prediction_kwargs_forward_forced_end2end(monkeypatch, mode, expected):
+    detector = _detector(monkeypatch)
+    detector.update_config({"end2end": mode, "max_det": 42})
+    kwargs = detector._prediction_kwargs("src")
+    assert kwargs["end2end"] is expected
+    assert kwargs["max_det"] == 42
+
+
+def test_tracking_path_carries_the_same_end2end_kwargs(monkeypatch):
+    # The tracked path shares _prediction_kwargs, so the NMS-free head applies
+    # to tracking too (Ultralytics tracks detect/segment/pose/obb results).
+    detector = _detector(monkeypatch)
+    detector._track_enabled = True
+    detector.update_config({"end2end": "on", "max_det": 7})
+    model = _FakeRoutingModel()
+
+    detector._infer(model, "src")
+
+    assert model.last_track_kwargs["end2end"] is True
+    assert model.last_track_kwargs["max_det"] == 7
+
+
 def test_status_reports_tracking_defaults(monkeypatch):
     status = _detector(monkeypatch).status()
     assert status["track_enabled"] is True
@@ -480,6 +686,179 @@ def test_infer_predicts_when_tracking_disabled(monkeypatch):
 
     assert model.predict_calls == 1
     assert model.track_calls == 0
+
+
+def test_detector_defaults_to_the_detect_task(monkeypatch):
+    status = _detector(monkeypatch).status()
+    assert status["task"] == "detect"
+    assert status["available_tasks"] == list(DETECT_TASKS)
+    assert status["emits_boxes"] is True
+    assert status["emits_raster"] is False
+    assert status["task_models"]["segment"] == "yolo26s-seg.pt"
+    assert status["task_models"]["openvocab"] == "yoloe-26s-seg.pt"
+
+
+def test_set_task_rejects_unknown_task(monkeypatch):
+    detector = _detector(monkeypatch)
+    with pytest.raises(ValueError):
+        detector.set_task("nonsense")
+
+
+def test_raster_tasks_report_no_boxes(monkeypatch):
+    status = _detector(monkeypatch).update_config({"task": "depth"})
+    assert status["task"] == "depth"
+    assert status["emits_boxes"] is False
+    assert status["emits_raster"] is True
+
+
+def test_each_task_gets_its_own_weights_cache(monkeypatch):
+    # detect keeps the fast/accurate split; the other heads key on the task name,
+    # so switching task must not evict the detect weights (or vice versa).
+    detector = _detector(monkeypatch)
+    assert detector._preset_key() == "detect:fast"
+    detector.set_mode("accurate")
+    assert detector._preset_key() == "detect:accurate"
+    detector.set_task("pose")
+    assert detector._preset_key() == "pose"
+
+    detector._models["pose"] = _FakeClosedModel()
+    detector._models["detect:accurate"] = _FakeClosedModel()
+    detector.update_config({"task_models": {"pose": "custom-pose.pt"}})
+    # Only the pose slot is dropped.
+    assert "pose" not in detector._models
+    assert "detect:accurate" in detector._models
+
+
+def test_task_models_rejects_unknown_or_detect_keys(monkeypatch):
+    detector = _detector(monkeypatch)
+    with pytest.raises(ValueError):
+        detector.update_config({"task_models": {"nonsense": "x.pt"}})
+    # "detect" has its own fast/accurate pair and is not settable here.
+    with pytest.raises(ValueError):
+        detector.update_config({"task_models": {"detect": "x.pt"}})
+
+
+def test_raster_tasks_never_track(monkeypatch):
+    # Ultralytics raises for `mode=track` on semantic/depth, so those tasks must
+    # take the predict path even with tracking switched on.
+    detector = _detector(monkeypatch)
+    detector._track_enabled = True
+    model = _FakeRoutingModel()
+
+    detector._infer(model, "src", "semantic")
+
+    assert model.predict_calls == 1
+    assert model.track_calls == 0
+
+
+def test_open_vocabulary_task_forces_fp32(monkeypatch):
+    # YOLOE mixes float32 text embeddings into a half-precision backbone and
+    # dies with a dtype mismatch, so half is dropped for this task only.
+    detector = _detector(monkeypatch)
+    detector._half_enabled = True
+
+    assert detector._half_for_task("detect") is True
+    assert detector._half_for_task("openvocab") is False
+    assert "half" not in detector._prediction_kwargs("src", "openvocab")
+    assert detector._prediction_kwargs("src", "segment")["half"] is True
+
+
+def test_extract_boxes_attaches_segmentation_masks(monkeypatch):
+    detector = _detector(monkeypatch)
+    result = _FakeDetectResult(
+        [_FakeResultBox([10, 10, 40, 40], 0, 0.9)],
+        masks=_FakeMasks([[(12, 12), (38, 14), (36, 38), (14, 36)]]),
+    )
+
+    boxes = detector._extract_boxes(result, 100, 100, {0: "person"}, "segment")
+
+    assert boxes[0]["mask"] == [[12.0, 12.0], [38.0, 14.0], [36.0, 38.0], [14.0, 36.0]]
+
+
+def test_mask_polygons_are_subsampled_not_truncated(monkeypatch):
+    detector = _detector(monkeypatch)
+    # A 500-point contour must come back capped but still spanning the shape —
+    # taking a prefix would clip the polygon to one edge of the object.
+    polygon = [(float(i), float(i)) for i in range(500)]
+    simplified = detector._simplify_polygon(polygon, 1000, 1000)
+
+    assert len(simplified) == 48
+    assert simplified[0] == [0.0, 0.0]
+    assert simplified[-1][0] > 480
+
+
+def test_extract_boxes_attaches_pose_keypoints(monkeypatch):
+    detector = _detector(monkeypatch)
+    result = _FakeDetectResult(
+        [_FakeResultBox([0, 0, 50, 50], 0, 0.9)],
+        keypoints=_FakeKeypoints([[[10.0, 20.0], [30.0, 40.0]]], [[0.9, 0.1]]),
+    )
+
+    boxes = detector._extract_boxes(result, 100, 100, {0: "person"}, "pose")
+
+    assert boxes[0]["keypoints"] == [[10.0, 20.0, 0.9], [30.0, 40.0, 0.1]]
+
+
+def test_keypoints_default_to_full_confidence_without_scores(monkeypatch):
+    detector = _detector(monkeypatch)
+    result = _FakeDetectResult(
+        [_FakeResultBox([0, 0, 50, 50], 0, 0.9)],
+        keypoints=_FakeKeypoints([[[10.0, 20.0]]]),
+    )
+
+    boxes = detector._extract_boxes(result, 100, 100, {0: "person"}, "pose")
+
+    assert boxes[0]["keypoints"] == [[10.0, 20.0, 1.0]]
+
+
+def test_obb_boxes_carry_both_the_quad_and_an_axis_aligned_box(monkeypatch):
+    detector = _detector(monkeypatch)
+    result = _FakeObbResult(
+        _FakeObb(
+            quads=[[[10, 0], [30, 10], [20, 30], [0, 20]]],
+            aligned=[[0, 0, 30, 30]],
+            classes=[3],
+            confidences=[0.77],
+            ids=[9],
+        )
+    )
+
+    boxes = detector._extract_boxes(result, 100, 100, {3: "ship"}, "obb")
+
+    assert boxes[0]["obb"] == [10.0, 0.0, 30.0, 10.0, 20.0, 30.0, 0.0, 20.0]
+    # The axis-aligned box is what zones / alerts / history consume, so it has to
+    # be present and clamped exactly like a plain detection.
+    assert boxes[0]["xyxy"] == [0.0, 0.0, 30.0, 30.0]
+    assert boxes[0]["label"] == "ship"
+    assert boxes[0]["track_id"] == 9
+
+
+def test_obb_quads_are_not_clamped_to_the_frame(monkeypatch):
+    # A rotated box that runs off the edge genuinely has corners outside it;
+    # clamping them one by one would shear the rectangle into another shape.
+    detector = _detector(monkeypatch)
+    result = _FakeObbResult(
+        _FakeObb(
+            quads=[[[-25, 308], [11, 326], [38, 273], [2, 255]]],
+            aligned=[[-25, 255, 38, 326]],
+            classes=[0],
+            confidences=[0.5],
+        )
+    )
+
+    boxes = detector._extract_boxes(result, 100, 400, {0: "field"}, "obb")
+
+    assert boxes[0]["obb"][0] == -25.0
+    assert boxes[0]["xyxy"][0] == 0.0  # ...but the axis-aligned box still is
+
+
+def test_obb_without_tracking_reports_null_ids(monkeypatch):
+    detector = _detector(monkeypatch)
+    result = _FakeObbResult(
+        _FakeObb([[[0, 0], [1, 0], [1, 1], [0, 1]]], [[0, 0, 1, 1]], [0], [0.5])
+    )
+    boxes = detector._extract_boxes(result, 10, 10, {0: "x"}, "obb")
+    assert boxes[0]["track_id"] is None
 
 
 def test_clamp_xyxy_keeps_boxes_inside_image():

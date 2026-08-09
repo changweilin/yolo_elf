@@ -180,6 +180,8 @@ def test_detector_config_round_trip():
                 "classes": "person, dog",
                 "conf_thresh": 0.4,
                 "img_size": 960,
+                "max_det": 120,
+                "end2end": "off",
             },
         )
         assert response.status_code == 200
@@ -189,9 +191,40 @@ def test_detector_config_round_trip():
         assert detector["configured_classes"] == ["person", "dog"]
         assert detector["conf_thresh"] == 0.4
         assert detector["img_size"] == 960
+        assert detector["max_det"] == 120
+        assert detector["end2end"] == "off"
 
         # Changes persist for later reads of the shared detector.
-        assert client.get("/api/status").json()["detector"]["img_size"] == 960
+        status_detector = client.get("/api/status").json()["detector"]
+        assert status_detector["img_size"] == 960
+        assert status_detector["end2end"] == "off"
+
+
+def test_detector_task_switch_round_trip():
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.get("/api/status").json()["detector"]["task"] == "detect"
+
+        response = client.post("/api/detector/task", json={"task": "pose"})
+        assert response.status_code == 200
+        detector = response.json()["detector"]
+        assert detector["task"] == "pose"
+        assert detector["model"] == "yolo26s-pose.pt"
+        assert detector["emits_boxes"] is True
+
+        # A raster task advertises that the box pipeline will be empty.
+        detector = client.post("/api/detector/task", json={"task": "depth"}).json()["detector"]
+        assert detector["emits_boxes"] is False
+        assert detector["emits_raster"] is True
+        assert client.get("/api/status").json()["detector"]["task"] == "depth"
+
+
+def test_detector_task_switch_rejects_unknown_task():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post("/api/detector/task", json={"task": "sorcery"})
+    assert response.status_code == 400
+    assert "task" in response.json()["detail"].lower()
 
 
 def test_detector_config_rejects_invalid_values():

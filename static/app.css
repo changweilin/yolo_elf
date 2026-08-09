@@ -872,6 +872,87 @@ input[type="range"] {
   border-bottom: 1px solid var(--line);
 }
 
+/* Seven icon buttons will not fit beside a label on a narrow panel, so this
+   variant stacks the label above the row and lets the row use the full width. */
+.panel-control-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.task-switch {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--control-bg);
+}
+
+.task-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.task-switch button + button {
+  border-left: 1px solid var(--line);
+}
+
+.task-switch button[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--primary-bg);
+}
+
+.task-switch button:disabled {
+  opacity: 0.45;
+}
+
+.task-switch svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Fast/accurate only exists for the detect head; dim it rather than hide it so
+   the panel does not reflow every time the task changes. */
+.is-disabled {
+  opacity: 0.4;
+}
+
+.raster-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-chip i {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
 .panel-control-label {
   font-size: 13px;
   font-weight: 600;
@@ -1036,11 +1117,16 @@ input[type="range"] {
   font-weight: 600;
 }
 
-.detect-mode {
+/* Compact segmented control. `.detect-mode` is the fast/accurate toggle;
+   `.segmented-compact` is the same sizing for any other one sitting beside it
+   in a form, so adjacent controls line up instead of differing by a few px. */
+.detect-mode,
+.segmented-compact {
   min-height: 36px;
 }
 
-.detect-mode button {
+.detect-mode button,
+.segmented-compact button {
   min-height: 34px;
 }
 

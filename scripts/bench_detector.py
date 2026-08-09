@@ -15,7 +15,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from app.config import get_settings
+from app.config import END2END_MODES, get_settings
 from app.detector import DetectionError, YoloDetector
 
 
@@ -57,6 +57,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--img-size", type=int, default=0)
     parser.add_argument("--conf", type=float, default=-1.0)
     parser.add_argument("--half", action="store_true")
+    # The pair that makes the NMS-free claim measurable: run the same weights
+    # twice, --end2end on vs off, and compare p50/p95.
+    parser.add_argument("--end2end", choices=END2END_MODES, default="")
+    parser.add_argument("--max-det", type=int, default=0)
     return parser.parse_args()
 
 
@@ -76,6 +80,10 @@ def apply_overrides(args: argparse.Namespace) -> Any:
         overrides["img_size"] = args.img_size
     if args.conf >= 0.0:
         overrides["conf_thresh"] = args.conf
+    if args.end2end:
+        overrides["yolo_end2end"] = args.end2end
+    if args.max_det > 0:
+        overrides["yolo_max_det"] = args.max_det
     return replace(settings, **overrides)
 
 
@@ -111,6 +119,10 @@ def main() -> int:
     print("YOLO Elf benchmark")
     print(f"model: {status['model']}")
     print(f"device: {status['device']} half: {status['half']}")
+    print(
+        f"end2end: {status['end2end']} (capable: {status['end2end_capable']}) "
+        f"max_det: {status['max_det']}"
+    )
     print(f"frames: {args.frames} warmup: {args.warmup} jpeg_bytes: {len(frame)} boxes_last: {boxes}")
     print(f"avg_ms: {statistics.mean(latencies):.2f}")
     print(f"p50_ms: {percentile(latencies, 50):.2f}")

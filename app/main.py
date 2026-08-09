@@ -350,6 +350,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         asyncio.create_task(asyncio.to_thread(detector.preload))
         return {"type": "detector_mode", "detector": detector.status()}
 
+    @api.post("/api/detector/task")
+    async def api_detector_task(request: Request) -> dict[str, Any]:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        task = body.get("task") if isinstance(body, dict) else None
+        try:
+            detector.set_task(task)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Same background preload as the mode switch: each task has its own
+        # checkpoint, so the client's progress bar can poll /api/status.
+        asyncio.create_task(asyncio.to_thread(detector.preload))
+        return {"type": "detector_task", "detector": detector.status()}
+
     @api.get("/api/detector/config")
     async def api_detector_config_get() -> dict[str, Any]:
         return {"type": "detector_config", "detector": detector.status()}

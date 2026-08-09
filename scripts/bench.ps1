@@ -9,7 +9,10 @@ param(
     [string]$Device = "",
     [int]$ImgSize = 0,
     [double]$Conf = -1,
-    [switch]$Half
+    [switch]$Half,
+    [ValidateSet("auto", "on", "off")]
+    [string]$End2End = "",
+    [int]$MaxDet = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,6 +53,12 @@ if ($Conf -ge 0) {
 }
 if ($Half) {
     $ArgsList += "--half"
+}
+if ($End2End) {
+    $ArgsList += @("--end2end", $End2End)
+}
+if ($MaxDet -gt 0) {
+    $ArgsList += @("--max-det", [string]$MaxDet)
 }
 
 Push-Location $Root
