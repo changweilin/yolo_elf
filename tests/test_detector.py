@@ -758,6 +758,8 @@ def test_detect_merges_every_head_into_one_payload(monkeypatch):
     monkeypatch.setattr(
         detector, "_decode_jpeg", lambda _raw: DecodedImage(data="frame", width=100, height=80)
     )
+    # detect() only runs heads whose weights are already resident.
+    detector._models = {FAST: _FakeClosedModel(), "pose": _FakeClosedModel()}
     monkeypatch.setattr(detector, "_ensure_model", lambda task=None: task)
     results = {
         "detect": _FakeDetectResult([_FakeResultBox([1, 2, 3, 4], 0, 0.9, track_id=1)]),
@@ -781,6 +783,7 @@ def test_detect_omits_the_task_breakdown_for_one_head(monkeypatch):
     monkeypatch.setattr(
         detector, "_decode_jpeg", lambda _raw: DecodedImage(data="frame", width=10, height=10)
     )
+    detector._models = {FAST: _FakeClosedModel()}
     monkeypatch.setattr(detector, "_ensure_model", lambda task=None: task)
     monkeypatch.setattr(detector, "_infer", lambda *_args, **_kwargs: [_FakeDetectResult([])])
 
@@ -788,6 +791,80 @@ def test_detect_omits_the_task_breakdown_for_one_head(monkeypatch):
 
     assert payload["tasks"] == ["detect"]
     assert "task_ms" not in payload
+    assert "pending_tasks" not in payload
+
+
+class _FakeThread:
+    """Records what would have been spawned instead of actually loading."""
+
+    started: list = []
+
+    def __init__(self, target=None, args=(), **_kwargs):
+        self._target = target
+        self._args = args
+
+    def start(self):
+        _FakeThread.started.append((self._target, self._args))
+
+
+@pytest.fixture
+def fake_threads(monkeypatch):
+    _FakeThread.started = []
+    monkeypatch.setattr("app.detector.threading.Thread", _FakeThread)
+    return _FakeThread.started
+
+
+def test_detect_never_loads_weights_on_the_worker_thread(monkeypatch, fake_threads):
+    # The regression this guards: loading here blocks the one thread every
+    # camera's frames pass through, so a first-use checkpoint download froze the
+    # viewer on its last frame for the whole download.
+    detector = _detector(monkeypatch)
+    detector.set_tasks(["detect", "pose"])
+    monkeypatch.setattr(
+        detector, "_decode_jpeg", lambda _raw: DecodedImage(data="frame", width=100, height=80)
+    )
+    # Only the detect head is resident; pose is not.
+    detector._models = {FAST: _FakeClosedModel()}
+    detector._names_by_preset = {FAST: {0: "person"}}
+    monkeypatch.setattr(detector, "_ensure_model", lambda task=None: task)
+    monkeypatch.setattr(
+        detector,
+        "_infer",
+        lambda _model, _src, task=None: [
+            _FakeDetectResult([_FakeResultBox([1, 2, 3, 4], 0, 0.9)])
+        ],
+    )
+
+    payload = detector.detect(b"jpeg", 3)
+
+    # The frame still went out, carrying the head that was ready.
+    assert payload["frame_id"] == 3
+    assert [box["task"] for box in payload["boxes"]] == ["detect"]
+    assert payload["pending_tasks"] == ["pose"]
+    assert detector.status()["loading_tasks"] == ["pose"]
+    assert len(fake_threads) == 1
+
+
+def test_a_failed_load_is_not_retried_on_every_frame(monkeypatch, fake_threads):
+    # A checkpoint that cannot be fetched has no cache to hit, so without the
+    # cooldown every frame would start another download attempt.
+    detector = _detector(monkeypatch)
+    detector._request_background_load("detect")
+    assert len(fake_threads) == 1
+
+    target, args = fake_threads[0]
+    monkeypatch.setattr(
+        detector, "_ensure_model", lambda task=None: (_ for _ in ()).throw(RuntimeError("404"))
+    )
+    target(*args)
+
+    detector._request_background_load("detect")
+    assert len(fake_threads) == 1
+
+    # Renaming the model is a new attempt, so the cooldown must not apply to it.
+    detector._drop_preset(FAST)
+    detector._request_background_load("detect")
+    assert len(fake_threads) == 2
 
 
 def test_raster_tasks_report_no_boxes(monkeypatch):

@@ -1559,6 +1559,17 @@ function connectSocket() {
       updateAdaptiveStatus();
       return;
     }
+    // Remote control from a viewer. Routed through the same functions the local
+    // buttons call, so every guard (recording disabled, no MediaRecorder, a
+    // storage mode with nowhere to write) applies identically.
+    if (payload.type === "command") {
+      if (payload.action === "record_start") {
+        startRecording();
+      } else if (payload.action === "record_stop") {
+        stopRecording();
+      }
+      return;
+    }
     if (payload.type === "error") {
       setChip(detectStatus, payload.message, "bad");
       if (payload.fatal) {

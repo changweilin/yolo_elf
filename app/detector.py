@@ -25,6 +25,12 @@ class DetectionError(RuntimeError):
     """Raised when a frame cannot be decoded or inferred."""
 
 
+# How long a failed load is remembered before the next frame may try again.
+# Without it a checkpoint that cannot be fetched is retried on every single
+# frame, and each retry pays Ultralytics' full download-and-back-off cost.
+MODEL_RETRY_COOLDOWN_S = 30.0
+
+
 # Vertices kept per segmentation contour. Raw contours run to several hundred
 # points; at 10 fps across every instance that dominates the payload, and the
 # overlay is a translucent shape where the difference is not visible.
@@ -174,6 +180,15 @@ class YoloDetector:
         # Guards model loading so a background preload (triggered by a mode
         # switch) and the detection worker never load the same weights twice.
         self._load_lock = threading.Lock()
+        # Presets whose weights are being fetched right now (mapped to the task
+        # name so status reports the head the user picked, not the
+        # "fast"/"accurate" preset behind it) and when each last failed. Both are
+        # read on the detection worker's hot path, so they get their own
+        # short-held lock rather than sharing `_load_lock`, which is held for the
+        # entire load, download included.
+        self._loading: dict[str, str] = {}
+        self._load_failed_at: dict[str, float] = {}
+        self._loading_lock = threading.Lock()
         self._names_by_preset: dict[str, dict[int, str]] = {}
         # Each preset's NMS-free capability, sampled once at load time (see
         # model_supports_end2end for why it cannot be read back later).
@@ -447,6 +462,10 @@ class YoloDetector:
         self._loaded_sources.pop(preset, None)
         for key in [key for key in self._tracker_models if key[0] == preset]:
             self._tracker_models.pop(key, None)
+        # A new model name is a new attempt: whatever the old one failed at says
+        # nothing about this one, so the cooldown must not carry over.
+        with self._loading_lock:
+            self._load_failed_at.pop(preset, None)
 
     def _set_classes(self, classes: Any) -> None:
         if isinstance(classes, str):
@@ -526,6 +545,10 @@ class YoloDetector:
             "raster_tasks": list(RASTER_TASKS),
             "max_active_tasks": MAX_ACTIVE_TASKS,
             "task_models": self.models_by_task(),
+            # Heads whose weights are being fetched right now. Frames keep
+            # flowing without them, so this is what tells the UI that a missing
+            # overlay is "not ready yet" rather than "broken".
+            "loading_tasks": sorted(set(self._loading.values())),
             "emits_boxes": any(task in BOX_TASKS for task in self._tasks),
             "emits_raster": any(task in RASTER_TASKS for task in self._tasks),
             "configured_classes": list(self._classes),
@@ -604,9 +627,16 @@ class YoloDetector:
         # which head is expensive.
         boxes: list[dict[str, Any]] = []
         task_ms: dict[str, float] = {}
+        pending: list[str] = []
         total_ms = 0.0
         for task in tasks:
-            model = self._ensure_model(task)
+            model = self._acquire_model(task)
+            if model is None:
+                # Weights not resident yet — they are being fetched off this
+                # thread. Skipping the head keeps frames flowing; it joins the
+                # payload on whichever frame first finds it loaded.
+                pending.append(task)
+                continue
             names = self._names_by_preset.get(self._preset_key(task), {})
             if tracker_key is not None and self._track_enabled and task in BOX_TASKS:
                 model = self._ensure_tracker_model(tracker_key, task)
@@ -643,6 +673,8 @@ class YoloDetector:
         payload["inference_ms"] = round(total_ms, 2)
         if len(tasks) > 1:
             payload["task_ms"] = task_ms
+        if pending:
+            payload["pending_tasks"] = pending
         return payload
 
     def warmup(self) -> dict[str, Any]:
@@ -711,6 +743,58 @@ class YoloDetector:
         self._ensure_classifier()
         return self.status()
 
+    def _acquire_model(self, task: str) -> Any | None:
+        """The task's model, but only if loading it costs nothing.
+
+        The detection worker is the single thread every camera's frames pass
+        through, so loading here stalls the whole stream: a first-use checkpoint
+        is a ~25 MB download, and the viewer sits frozen on its last frame for
+        the duration. Worse, a load that keeps failing has no cache to hit, so
+        every subsequent frame pays the same stall again. Returning ``None`` and
+        loading elsewhere trades a few box-less frames for a stream that never
+        stops moving.
+        """
+        if self._models.get(self._preset_key(task)) is None:
+            self._request_background_load(task)
+            return None
+        return self._ensure_model(task)
+
+    def _request_background_load(self, task: str) -> None:
+        """Start loading one task's weights off the detection worker's thread.
+
+        At most one load per preset is in flight, and a preset that just failed
+        is left alone until the cooldown expires — otherwise a bad model name
+        would spawn a fresh download attempt for every frame that arrives.
+        """
+        preset = self._preset_key(task)
+        with self._loading_lock:
+            if preset in self._loading:
+                return
+            failed_at = self._load_failed_at.get(preset)
+            if failed_at is not None and time.monotonic() - failed_at < MODEL_RETRY_COOLDOWN_S:
+                return
+            self._loading[preset] = task
+
+        thread = threading.Thread(
+            target=self._background_load,
+            args=(task, preset),
+            name=f"yolo-load-{preset}",
+            daemon=True,
+        )
+        thread.start()
+
+    def _background_load(self, task: str, preset: str) -> None:
+        try:
+            self._ensure_model(task)
+        except Exception:  # noqa: BLE001 - reported via last_load_error
+            # Every failure mode lands here, so this is the one place the
+            # cooldown has to be stamped for it to actually hold.
+            with self._loading_lock:
+                self._load_failed_at[preset] = time.monotonic()
+        finally:
+            with self._loading_lock:
+                self._loading.pop(preset, None)
+
     def _ensure_model(self, task: str | None = None) -> Any:
         preset = self._preset_key(task)
         cached = self._models.get(preset)
@@ -764,6 +848,8 @@ class YoloDetector:
             self._open_vocab_applied[preset] = applied
             self._names = resolved_names
             self._load_error = None
+            with self._loading_lock:
+                self._load_failed_at.pop(preset, None)
             return model
 
     def _ensure_tracker_model(self, tracker_key: str, task: str | None = None) -> Any:

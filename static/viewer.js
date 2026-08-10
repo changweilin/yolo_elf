@@ -189,6 +189,8 @@ const viewerMinConf = document.querySelector("#viewerMinConf");
 const viewerMinConfValue = document.querySelector("#viewerMinConfValue");
 const saveFrameButton = document.querySelector("#saveFrameButton");
 const saveFrameHint = document.querySelector("#saveFrameHint");
+const pauseButton = document.querySelector("#pauseButton");
+const viewerRecordButton = document.querySelector("#viewerRecordButton");
 
 const state = {
   ws: null,
@@ -214,6 +216,15 @@ const state = {
   tasks: ["detect"],
   maxTasks: 4,
   zonesByCamera: {},
+  // Display-only freeze. The socket stays open and the server keeps detecting
+  // for everyone else; this tab simply stops applying incoming frames, so
+  // resuming jumps straight to live rather than replaying a backlog.
+  paused: false,
+  // Mirrors the recorder's own state from the status poll, so the button shows
+  // what the phone is actually doing (including when its local button was used).
+  cameraRecording: false,
+  cameraConnected: false,
+  recordRequestInFlight: false,
   editor: { active: false, draft: [] },
   // Viewer-only display filters (never touch the backend / detector).
   knownClasses: new Set(),
@@ -531,6 +542,12 @@ function renderDemoViewer() {
   for (const button of taskButtons) {
     button.disabled = true;
   }
+  renderRecordButton();
+  // Nothing streams in the static demo, so a pause control would only look
+  // broken; the record button disables itself through demoMode.
+  if (pauseButton) {
+    pauseButton.disabled = true;
+  }
   if (zoneEditToggle) {
     zoneEditToggle.disabled = true;
   }
@@ -572,6 +589,11 @@ function renderFrameBytes(data) {
     return;
   }
   state.pendingFrame = null;
+  // Paused: drop the frame before it costs an object URL. The overlay keeps
+  // redrawing the pane's retained detection, so the boxes stay on the still.
+  if (state.paused) {
+    return;
+  }
 
   const pane = state.panes.get(frame.camera_id || "") || activePane();
   if (!pane) {
@@ -599,6 +621,7 @@ function renderFrameBytes(data) {
   if (!active || active === pane) {
     renderMetrics(frame.detection);
     renderError(frame.detection.error || "");
+    renderPendingTasks(frame.detection);
     updateVlmCaption();
   }
 }
@@ -662,6 +685,7 @@ function renderStatus(status) {
   );
   renderCameraLink(streams);
   renderPhoneStorage(streams.length === 1 ? streams[0] : status);
+  renderRemoteRecording(streams, status);
   renderModel(status.detector || {});
   renderVlmChannel(status.vlm);
   droppedMetric.textContent = String(status.frames_dropped ?? "-");
@@ -884,6 +908,30 @@ function renderTaskHint() {
       : `執行 ${names}。可再勾選其他任務同時疊加，代價是每多一項就多跑一次推論。`;
 }
 
+// True while the hint is showing a load, so the normal hint is restored exactly
+// once instead of being rewritten on every frame.
+let taskHintPending = false;
+
+// A head whose weights are still being fetched runs on no frame and draws
+// nothing. Without this the overlay just goes missing and the detector reads as
+// broken — the frames themselves never stop, which is the whole point.
+function renderPendingTasks(detection) {
+  if (!taskHint) {
+    return;
+  }
+  const pending = detection?.pending_tasks;
+  if (!Array.isArray(pending) || pending.length === 0) {
+    if (taskHintPending) {
+      taskHintPending = false;
+      renderTaskHint();
+    }
+    return;
+  }
+  taskHintPending = true;
+  const names = pending.map((task) => TASK_LABELS[task] || task).join("＋");
+  taskHint.textContent = `${names} 權重下載/載入中，好了會自動接上；期間畫面照常更新。`;
+}
+
 // Which tab's chips are on screen. Purely a display choice: a task stays active
 // while its tab is hidden, so a raster underlay can run beneath box overlays.
 function setTaskTab(name) {
@@ -1090,6 +1138,86 @@ function saveSnapshot() {
   } catch {
     // A cross-origin / tainted frame makes toBlob throw SecurityError.
     showSaveHint("存圖失敗（畫面受保護）");
+  }
+}
+
+// Freeze what this tab shows. Deliberately not a server-side pause: the stream
+// belongs to every viewer, and stopping it would also stop zones, alerts and
+// history for everyone. Resuming picks up the newest frame, never a backlog.
+function setPaused(paused) {
+  state.paused = Boolean(paused);
+  if (!pauseButton) {
+    return;
+  }
+  pauseButton.classList.toggle("is-paused", state.paused);
+  const label = state.paused ? "繼續播放" : "暫停畫面";
+  pauseButton.setAttribute("aria-pressed", state.paused ? "true" : "false");
+  pauseButton.setAttribute("aria-label", label);
+  pauseButton.title = state.paused
+    ? "繼續播放（直接跳到最新影格）"
+    : "暫停畫面（串流繼續，只凍結這個分頁的顯示）";
+}
+
+// The recorder's state, not this button's: it follows `camera_recording` from
+// the status poll, so pressing the phone's own button moves this button too.
+function renderRemoteRecording(streams, status) {
+  const active = activePane();
+  const stream =
+    streams.find((entry) => entry.camera_id === active?.cameraId) ||
+    (streams.length === 1 ? streams[0] : null);
+  const source = stream || status;
+  state.cameraConnected = Boolean(source.camera_connected);
+  state.cameraRecording = Boolean(source.camera_recording);
+  renderRecordButton();
+}
+
+function renderRecordButton() {
+  if (!viewerRecordButton) {
+    return;
+  }
+  const recording = state.cameraRecording;
+  viewerRecordButton.classList.toggle("recording", recording);
+  viewerRecordButton.disabled =
+    demoMode || state.recordRequestInFlight || !state.cameraConnected;
+  const label = recording ? "停止錄影" : "開始錄影";
+  viewerRecordButton.setAttribute("aria-pressed", recording ? "true" : "false");
+  viewerRecordButton.setAttribute("aria-label", label);
+  viewerRecordButton.title = state.cameraConnected
+    ? `${label}（遙控錄影端）`
+    : "錄影端未連線";
+}
+
+async function toggleRemoteRecording() {
+  if (demoMode || state.recordRequestInFlight) {
+    return;
+  }
+  const action = state.cameraRecording ? "stop" : "start";
+  state.recordRequestInFlight = true;
+  renderRecordButton();
+  try {
+    const body = { action };
+    const cameraId = activePane()?.cameraId || pinnedCamera;
+    if (cameraId) {
+      body.camera_id = cameraId;
+    }
+    const response = await fetch("/api/camera/recording", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      setChip(phoneStorageStatus, action === "start" ? "錄影啟動失敗" : "錄影停止失敗", "bad");
+      return;
+    }
+    // Optimistic only as far as the next status tick: the recorder may still
+    // refuse (recording disabled, no MediaRecorder), and that reply is the
+    // status poll flipping this back.
+    state.cameraRecording = action === "start";
+  } catch {
+    setChip(phoneStorageStatus, "錄影指令送不出去", "bad");
+  } finally {
+    state.recordRequestInFlight = false;
+    renderRecordButton();
   }
 }
 
@@ -1720,6 +1848,8 @@ for (const tab of taskTabs) {
 
 viewerMinConf?.addEventListener("input", (event) => setViewerMinConf(event.target.value));
 saveFrameButton?.addEventListener("click", saveSnapshot);
+pauseButton?.addEventListener("click", () => setPaused(!state.paused));
+viewerRecordButton?.addEventListener("click", toggleRemoteRecording);
 
 window.addEventListener("resize", resizeOverlays);
 window.addEventListener("beforeunload", releaseImageUrls);
@@ -1729,6 +1859,7 @@ window.addEventListener("beforeunload", releaseImageUrls);
 syncPanes([]);
 setPanelExpanded(initialPanelExpanded(), false);
 renderDetectTask(state.tasks);
+renderRecordButton();
 renderClassChips();
 if (viewerMinConf) {
   setViewerMinConf(viewerMinConf.value);
