@@ -6,7 +6,7 @@
     <title>YOLO Elf Viewer</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="/static/app.css?v=ui-10" />
+    <link rel="stylesheet" href="/static/app.css?v=ui-11" />
   </head>
   <body>
     <main class="viewer-shell">
@@ -106,98 +106,20 @@
           </div>
         </div>
         <div class="panel-body" id="viewerPanelBody">
-        <!-- Server-side head switch: unlike the YOLO/VLM channel toggle this
-             changes what the single detection worker runs, for every viewer.
-             Split into two tabs by what the head draws, because that is what
-             decides whether two heads can be shown at the same time:
-               · 物件疊加 — per-instance boxes/masks/skeletons that composite
-                 freely, so these are checkboxes and any mix may run at once.
-               · 整張畫面 — full-frame rasters; each repaints every pixel, so
-                 picking one clears the other.
-             Only the chips of the open tab are on screen, which is what keeps
-             the row readable now that there are seven of them. -->
-        <div class="panel-control panel-control-stacked task-control">
-          <div class="task-tabs" role="tablist" aria-label="任務類別">
-            <button
-              type="button"
-              role="tab"
-              id="taskTabBox"
-              data-task-tab="box"
-              aria-selected="true"
-              aria-controls="taskPanelBox"
-            >
-              物件疊加
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="taskTabRaster"
-              data-task-tab="raster"
-              aria-selected="false"
-              aria-controls="taskPanelRaster"
-            >
-              整張畫面
-            </button>
-          </div>
-          <div id="taskPanelBox" class="task-chips" role="tabpanel" aria-labelledby="taskTabBox">
-            <button type="button" class="task-chip" data-detect-task="detect" aria-pressed="true" title="物件偵測：方框 + 追蹤 + 區域 / 告警 / 歷史">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <rect x="3" y="5" width="11" height="9" rx="1"></rect>
-                <rect x="11" y="11" width="10" height="8" rx="1"></rect>
-              </svg>
-              物件
-            </button>
-            <button type="button" class="task-chip" data-detect-task="segment" aria-pressed="false" title="實例分割：每個物件的輪廓多邊形">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M4 14c1-6 6-9 10-8s6 5 5 9-5 7-9 6-7-3-6-7z"></path>
-                <path d="M8 13c.5-2.5 2.5-4 4.5-3.5"></path>
-              </svg>
-              分割
-            </button>
-            <button type="button" class="task-chip" data-detect-task="pose" aria-pressed="false" title="姿態估計：人體骨架關鍵點">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <circle cx="12" cy="4" r="2"></circle>
-                <path d="M12 6v7M12 8l-4 3M12 8l4 3M12 13l-3 7M12 13l3 7"></path>
-              </svg>
-              姿態
-            </button>
-            <button type="button" class="task-chip" data-detect-task="obb" aria-pressed="false" title="旋轉框：可傾斜的方框（空拍 / 遙測常用）">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <rect x="5" y="7" width="14" height="10" rx="1" transform="rotate(-20 12 12)"></rect>
-              </svg>
-              旋轉框
-            </button>
-            <button type="button" class="task-chip" data-detect-task="openvocab" aria-pressed="false" title="開放詞彙（YOLOE-26）：用「開放詞彙類別」文字提示自訂要找什麼">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <circle cx="11" cy="11" r="6"></circle>
-                <path d="M20 20l-4.5-4.5M9 11h4M11 9v4"></path>
-              </svg>
-              開放詞彙
-            </button>
-          </div>
-          <div id="taskPanelRaster" class="task-chips" role="tabpanel" aria-labelledby="taskTabRaster" hidden>
-            <button type="button" class="task-chip" data-detect-task="semantic" aria-pressed="false" title="語意分割：整張畫面逐像素分類（無方框）">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M3 4h8v7H3zM11 4h10v7H11zM3 11h6v9H3zM9 11h12v9H9z"></path>
-              </svg>
-              語意
-            </button>
-            <button type="button" class="task-chip" data-detect-task="depth" aria-pressed="false" title="單目深度估計：逐像素距離（亮＝近，無方框）">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M3 20l9-16 9 16z"></path>
-                <path d="M7.5 12h9M9.7 16h4.6"></path>
-              </svg>
-              深度
-            </button>
+        <!-- Read-out only. Which heads run (and fast/accurate) is server-side
+             global state — one GPU worker serves the whole machine, so flipping
+             it here would change every other viewer too. It therefore lives with
+             the rest of the detector settings on /settings; this page's job is
+             to show what those heads produced, plus the controls that need the
+             live picture to operate (filters, ROI, camera, snapshot). -->
+        <div class="panel-control panel-control-stacked task-readout">
+          <div class="task-readout-head">
+            <span class="panel-control-label">任務</span>
+            <a id="taskSettingsLink" href="/settings">
+              <button type="button" class="compact-button">變更</button>
+            </a>
           </div>
           <p id="taskHint" class="settings-hint"></p>
-        </div>
-        <div class="panel-control">
-          <span class="panel-control-label">辨識模式</span>
-          <div id="modeGroup" class="segmented-control detect-mode" role="group" aria-label="辨識模式">
-            <button type="button" data-detect-mode="fast" aria-pressed="true" title="快速辨識（較小模型，速度優先）">快速</button>
-            <button type="button" data-detect-mode="accurate" aria-pressed="false" title="精準辨識（較大模型，準確優先）">精準</button>
-          </div>
         </div>
         <!-- Class swatches (semantic) or the metre range (depth). Empty and
              hidden for the box tasks, which label themselves on the canvas. -->
@@ -208,10 +130,6 @@
             <button type="button" data-channel="yolo" aria-pressed="true" title="YOLO：精準框、追蹤、歷史">YOLO</button>
             <button type="button" data-channel="vlm" aria-pressed="false" title="VLM：開放詞彙框、場景描述（較慢）">VLM</button>
           </div>
-        </div>
-        <div id="modelSwitchProgress" class="switch-progress" role="status" aria-live="polite">
-          <span class="switch-label">切換模型中…</span>
-          <div class="progress-track"><div id="modelSwitchFill" class="progress-fill"></div></div>
         </div>
         <div class="metric-grid">
           <div class="metric">
@@ -316,6 +234,6 @@
         </button>
       </div>
     </main>
-    <script type="module" src="/static/viewer.js?v=multitask-1"></script>
+    <script type="module" src="/static/viewer.js?v=tasks-in-settings-1"></script>
   </body>
 </html>

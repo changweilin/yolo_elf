@@ -807,11 +807,6 @@ input[type="range"] {
   background: var(--bad);
 }
 
-.viewer-panel .switch-progress.active {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-}
-
 .settings-card .switch-progress.active {
   padding: 0 16px 14px;
 }
@@ -957,6 +952,14 @@ input[type="range"] {
 
 .task-control {
   gap: 8px;
+}
+
+/* On the settings page the task control is a card section, not a `.panel-control`
+   row, so it has to bring its own column layout and card padding. */
+.settings-card .task-control {
+  display: flex;
+  flex-direction: column;
+  padding: 0 16px 16px;
 }
 
 .task-tabs {
@@ -1124,7 +1127,8 @@ input[type="range"] {
   display: none;
 }
 
-.view-filter-head {
+.view-filter-head,
+.task-readout-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1299,9 +1303,15 @@ input[type="range"] {
 }
 
 @media (max-width: 720px) {
+  /* The brand column is the only one allowed to shrink. With a fixed brand the
+     four nav icons plus the theme button need ~407px of viewport, so anything
+     narrower (any common phone) pushed the theme button back over the nav.
+     The nav track must be `max-content`, not `auto`: `.role-switch` clips its
+     overflow, so its min-content size is 0 and an `auto` track would happily
+     shrink under the icons while they kept their width and spilled right. */
   .topbar {
     display: grid;
-    grid-template-columns: auto auto 1fr;
+    grid-template-columns: minmax(0, 112px) max-content 1fr;
     align-items: center;
     gap: 10px 10px;
     left: calc(12px + env(safe-area-inset-left));
@@ -1312,8 +1322,15 @@ input[type="range"] {
   /* Brand, the recorder/viewer/settings nav and the light/dark toggle share the
      top row; the status chips scroll on a second row so the bar stays short. */
   .brand {
-    width: 112px;
-    min-width: 112px;
+    width: 100%;
+    min-width: 0;
+    max-width: 112px;
+  }
+
+  /* Tighter than the desktop 14px so the nav itself needs less of that row;
+     the icons keep their size, only the dead space around them goes. */
+  .role-switch a {
+    padding: 0 10px;
   }
 
   .status-row {

@@ -18,10 +18,6 @@ const uploadMetric = document.querySelector("#uploadMetric");
 const errorLine = document.querySelector("#errorLine");
 const viewerPanel = document.querySelector("#viewerPanel");
 const panelToggle = document.querySelector("#panelToggle");
-const modeGroup = document.querySelector("#modeGroup");
-const modeButtons = modeGroup
-  ? Array.from(modeGroup.querySelectorAll("[data-detect-mode]"))
-  : [];
 
 // Channel switch (YOLO ⇄ VLM). Hidden until /api/status reports the VLM channel
 // is enabled server-side. Purely a viewer-side toggle: it only changes which
@@ -33,26 +29,21 @@ const channelButtons = channelGroup
   : [];
 const vlmCaption = document.querySelector("#vlmCaption");
 
-// Task switch (detect / segment / pose / obb / open-vocab / semantic / depth).
-// Unlike the channel toggle this one *is* server-side: it swaps which heads the
-// single detection worker runs, so it affects every viewer at once. Several may
-// run at once — each extra head is another model pass on the same frame.
-const taskButtons = Array.from(document.querySelectorAll("[data-detect-task]"));
-const taskTabs = Array.from(document.querySelectorAll("[data-task-tab]"));
-const taskPanels = {
-  box: document.querySelector("#taskPanelBox"),
-  raster: document.querySelector("#taskPanelRaster"),
-};
+// Which heads the server runs (detect / segment / pose / obb / open-vocab /
+// semantic / depth) is read-only here — the switch lives on /settings because it
+// is global to the single detection worker. This page only mirrors it, because
+// the head set decides which of the live controls below can do anything.
 const taskHint = document.querySelector("#taskHint");
+const taskSettingsLink = document.querySelector("#taskSettingsLink");
 const viewFilterControl = document.querySelector("#viewFilterControl");
 const zoneEditorControl = document.querySelector("#zoneEditorControl");
 const rasterLegend = document.querySelector("#rasterLegend");
 
-// Mirrors app/config.py. Only one raster head may run at a time (each repaints
-// every pixel), and the order here is the order tasks are sent to the server.
+// Mirrors app/config.py. The box heads are the ones that feed the class filter
+// and the ROI editor; the two trailing rasters (semantic, depth) emit no boxes.
+// The order is fixed because colorForClass offsets the palette by index.
 const BOX_TASKS = ["detect", "segment", "pose", "obb", "openvocab"];
-const RASTER_TASKS = ["semantic", "depth"];
-const TASK_ORDER = [...BOX_TASKS, ...RASTER_TASKS];
+const TASK_ORDER = [...BOX_TASKS, "semantic", "depth"];
 const TASK_LABELS = {
   detect: "物件",
   segment: "分割",
@@ -74,16 +65,6 @@ const POSE_SKELETON = [
 const KEYPOINT_MIN_CONF = 0.25;
 // Full-frame overlay; opaque enough to read, sheer enough to keep the scene.
 const RASTER_ALPHA = 0.55;
-
-import { createModelSwitch } from "./mode-switch.js";
-
-const modelSwitch = createModelSwitch({
-  progressEl: document.querySelector("#modelSwitchProgress"),
-  fillEl: document.querySelector("#modelSwitchFill"),
-  lock(on) {
-    modeGroup?.classList.toggle("is-locked", on);
-  },
-});
 
 const moduleUrl = new URL(import.meta.url);
 const demoMode =
@@ -209,12 +190,9 @@ const state = {
   // Which channel this tab draws: "yolo" (per-frame, tracked) or "vlm"
   // (periodic open-vocab). Both ride the same JPEG underlay.
   channel: "yolo",
-  // Mirrors the server's active detect preset so the task switch can restart
-  // the progress bar without inventing a mode.
-  detectMode: "fast",
-  // Every head the server is running, newest status wins. Never empty.
+  // Every head the server is running, newest status wins. Never empty. Set on
+  // /settings; here it only decides which live controls stay on screen.
   tasks: ["detect"],
-  maxTasks: 4,
   zonesByCamera: {},
   // Display-only freeze. The socket stays open and the server keeps detecting
   // for everyone else; this tab simply stops applying incoming frames, so
@@ -535,12 +513,9 @@ function renderDemoViewer() {
   setChip(modelStatus, "demo snapshot", "warn");
   setChip(storageStatus, "storage frozen", "warn");
   setChip(alertStatus, "⚠ person ×2 (demo)", "bad");
-  for (const button of modeButtons) {
-    button.disabled = true;
-  }
-  // The static demo has no server, so switching heads would silently do nothing.
-  for (const button of taskButtons) {
-    button.disabled = true;
+  // The static build ships no settings page, so the link would 404.
+  if (taskSettingsLink) {
+    taskSettingsLink.hidden = true;
   }
   renderRecordButton();
   // Nothing streams in the static demo, so a pause control would only look
@@ -810,80 +785,24 @@ function setChannel(channel) {
   updateVlmCaption();
 }
 
-// `authoritative` marks the reply to the newest task switch: it may write the
-// task chips even while another request is still open. Everything else (the
-// status poll, the mode switch) leaves them alone until the air is clear.
-function renderModel(detector, authoritative = false) {
+function renderModel(detector) {
   const modelText = detector.loaded ? detector.model : "model not loaded";
   setChip(modelStatus, modelText, detector.last_load_error ? "bad" : detector.loaded ? "good" : "warn");
-  if (detector.mode) {
-    state.detectMode = detector.mode;
-  }
-  renderDetectMode(detector.mode);
-  if (Number.isFinite(detector.max_active_tasks)) {
-    state.maxTasks = detector.max_active_tasks;
-  }
-  // Skip while a switch is in flight: this status is older than the click that
-  // has not been answered yet, so applying it would flicker the chips back.
-  if (!authoritative && taskRequestsInFlight > 0) {
-    return;
-  }
   // `tasks` is the multi-head list; older servers only report `task`.
   renderDetectTask(detector.tasks || (detector.task ? [detector.task] : []));
 }
 
-function renderDetectMode(mode) {
-  if (!mode) {
-    return;
-  }
-  for (const button of modeButtons) {
-    button.setAttribute("aria-pressed", button.dataset.detectMode === mode ? "true" : "false");
-  }
-}
-
-async function setDetectMode(mode) {
-  renderDetectMode(mode);
-  modelSwitch.begin(mode);
-  setChip(modelStatus, `switching to ${mode}…`, "warn");
-  try {
-    const response = await fetch("/api/detector/mode", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode }),
-    });
-    if (response.ok) {
-      const payload = await response.json();
-      renderModel(payload.detector || {});
-    }
-  } catch {
-    // The status poll will reconcile the chips on the next tick.
-  }
-}
-
+// Read-only: the head set arrives from /api/status (someone changed it on
+// /settings, or the server started with it). All this does is mirror it and
+// drop the live controls those heads cannot feed.
 function renderDetectTask(tasks) {
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return;
   }
   state.tasks = tasks;
-  const active = new Set(tasks);
-  const atCap = tasks.length >= state.maxTasks;
-  for (const button of taskButtons) {
-    const task = button.dataset.detectTask;
-    const on = active.has(task);
-    button.setAttribute("aria-pressed", on ? "true" : "false");
-    // A raster chip is never capped out: picking it replaces the other raster
-    // rather than adding a pass, so the cap cannot be what blocks it.
-    button.disabled = !on && atCap && !RASTER_TASKS.includes(task);
-  }
-  // Fast/accurate is a detect-only axis: the other heads have a single
-  // checkpoint each, so the toggle would be a no-op that looks like a control.
-  const hasDetect = active.has("detect");
-  modeGroup?.classList.toggle("is-disabled", !hasDetect);
-  for (const button of modeButtons) {
-    button.disabled = !hasDetect;
-  }
-  // Drop the controls the running heads cannot feed: class filter and minimum
-  // confidence act on boxes, ROI zones only ever apply to plain detect.
+  const hasDetect = tasks.includes("detect");
+  // Class filter and minimum confidence act on boxes; ROI zones only ever apply
+  // to plain detect. Without them these panels would filter nothing.
   const emitsBoxes = tasks.some((entry) => BOX_TASKS.includes(entry));
   if (viewFilterControl) {
     viewFilterControl.hidden = !emitsBoxes;
@@ -904,8 +823,8 @@ function renderTaskHint() {
   const names = state.tasks.map((task) => TASK_LABELS[task] || task).join("＋");
   taskHint.textContent =
     state.tasks.length > 1
-      ? `同時執行 ${names}：每格影像跑 ${state.tasks.length} 次推論，延遲約為單一任務的 ${state.tasks.length} 倍。`
-      : `執行 ${names}。可再勾選其他任務同時疊加，代價是每多一項就多跑一次推論。`;
+      ? `${names}：每格影像跑 ${state.tasks.length} 次推論，延遲約為單一任務的 ${state.tasks.length} 倍。`
+      : `${names}。要換任務或同時疊加多個，請到設定頁。`;
 }
 
 // True while the hint is showing a load, so the normal hint is restored exactly
@@ -930,78 +849,6 @@ function renderPendingTasks(detection) {
   taskHintPending = true;
   const names = pending.map((task) => TASK_LABELS[task] || task).join("＋");
   taskHint.textContent = `${names} 權重下載/載入中，好了會自動接上；期間畫面照常更新。`;
-}
-
-// Which tab's chips are on screen. Purely a display choice: a task stays active
-// while its tab is hidden, so a raster underlay can run beneath box overlays.
-function setTaskTab(name) {
-  for (const tab of taskTabs) {
-    tab.setAttribute("aria-selected", tab.dataset.taskTab === name ? "true" : "false");
-  }
-  for (const [key, panel] of Object.entries(taskPanels)) {
-    if (panel) {
-      panel.hidden = key !== name;
-    }
-  }
-}
-
-// Checkbox semantics: toggling never replaces the whole set, except between the
-// two rasters, which cannot both be drawn. The last active task cannot be
-// switched off — the worker always runs something.
-function nextTasks(task) {
-  const active = new Set(state.tasks);
-  if (active.has(task)) {
-    if (active.size === 1) {
-      return null;
-    }
-    active.delete(task);
-  } else {
-    if (RASTER_TASKS.includes(task)) {
-      for (const other of RASTER_TASKS) {
-        active.delete(other);
-      }
-    } else if (active.size >= state.maxTasks) {
-      return null;
-    }
-    active.add(task);
-  }
-  return TASK_ORDER.filter((entry) => active.has(entry));
-}
-
-// Chips are toggled far faster than a round trip, and each POST answers with the
-// set *it* installed. Without a sequence number the reply to an older click
-// would repaint the chips over a newer one — and so would the 1 Hz status poll.
-// Only the newest request is allowed to write the task UI.
-let taskRequestSeq = 0;
-let taskRequestsInFlight = 0;
-
-async function setDetectTask(task) {
-  const tasks = nextTasks(task);
-  if (!tasks) {
-    return;
-  }
-  renderDetectTask(tasks);
-  // Each task is its own checkpoint, so reuse the model-switch progress bar.
-  modelSwitch.begin(state.detectMode || "fast");
-  setChip(modelStatus, `switching to ${tasks.join("+")}…`, "warn");
-  taskRequestSeq += 1;
-  taskRequestsInFlight += 1;
-  const seq = taskRequestSeq;
-  try {
-    const response = await fetch("/api/detector/task", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tasks }),
-    });
-    if (response.ok) {
-      const payload = await response.json();
-      renderModel(payload.detector || {}, seq === taskRequestSeq);
-    }
-  } catch {
-    // The status poll will reconcile the chips on the next tick.
-  } finally {
-    taskRequestsInFlight -= 1;
-  }
 }
 
 // Legend for the raster channels: class swatches for semantic, the metre range
@@ -1820,10 +1667,6 @@ panelToggle?.addEventListener("click", () => {
   setPanelExpanded(Boolean(viewerPanel?.classList.contains("is-collapsed")));
 });
 
-for (const button of modeButtons) {
-  button.addEventListener("click", () => setDetectMode(button.dataset.detectMode));
-}
-
 for (const button of channelButtons) {
   button.addEventListener("click", () => setChannel(button.dataset.channel));
 }
@@ -1839,12 +1682,6 @@ zoneClearButton?.addEventListener("click", () => {
   updateDraftHint();
 });
 stage.addEventListener("click", onStageClick);
-for (const button of taskButtons) {
-  button.addEventListener("click", () => setDetectTask(button.dataset.detectTask));
-}
-for (const tab of taskTabs) {
-  tab.addEventListener("click", () => setTaskTab(tab.dataset.taskTab));
-}
 
 viewerMinConf?.addEventListener("input", (event) => setViewerMinConf(event.target.value));
 saveFrameButton?.addEventListener("click", saveSnapshot);
