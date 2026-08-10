@@ -56,8 +56,9 @@ $env:YOLO_EXPORT = "onnx"   # 或 "engine"
 
 ## 快速 / 精準模式切換
 
-不必重啟即可在兩個預設之間切換：在 Viewer 右側面板按 **快速 / 精準**，或呼叫
-`POST /api/detector/mode`（body 為 `{"mode": "fast"}` 或 `{"mode": "accurate"}`）。
+不必重啟即可在兩個預設之間切換：在 `/settings` 的「辨識模式」按 **快速 / 精準** 再按「套用」，
+或呼叫 `POST /api/detector/mode`（body 為 `{"mode": "fast"}` 或 `{"mode": "accurate"}`）。
+這一軸只對 `detect` 有意義（其餘任務各自只有一份權重），所以沒勾 `detect` 時它是灰的。
 
 - **快速 (fast)**：使用 `YOLO_MODEL`（預設 `yolo26s.pt`），速度優先。
 - **精準 (accurate)**：使用 `YOLO_MODEL_ACCURATE`（預設 `yolo26x.pt`，YOLO26 系列中最準），
@@ -68,9 +69,10 @@ $env:YOLO_EXPORT = "onnx"   # 或 "engine"
 
 ## 七種任務通道（兩個分頁，可勾選並用）
 
-Viewer 右側面板最上方依「畫出來的東西」分成兩個分頁，或 `POST /api/detector/task`
-（`{"task": "segment"}`），或啟動時 `DETECT_TASK`。每個頭是各自的權重，切換時在背景載入，
-進度沿用「切換模型中…」進度條；各頭的權重**各自快取**，切回去不用重載。
+`/settings` 最上方的「任務通道」卡片依「畫出來的東西」分成兩個分頁，或 `POST /api/detector/task`
+（`{"task": "segment"}`），或啟動時 `DETECT_TASK`。點晶片即時生效，**不必按「套用」**——套用是
+下面那張表單的事。每個頭是各自的權重，切換時在背景載入，進度沿用「切換模型中…」進度條；
+各頭的權重**各自快取**，切回去不用重載。
 
 - **物件疊加**：`detect`／`segment`／`pose`／`obb`／`openvocab`。都是掛在單一物件上的框、
   輪廓與骨架，疊在同一張畫面上互不衝突，所以做成**勾選**，愛開幾個就開幾個。
@@ -98,7 +100,9 @@ Ultralytics 算好的軸對齊 `xyxy`，下游吃 `xyxy`、疊圖畫 `obb`，兩
 歷史在這兩個任務下看到的是空白幀——這是刻意的，不是壞掉。
 
 ⚠️ 任務是**伺服器端**的設定（全機只有一個 GPU worker），切換會影響**所有** viewer，
-不像 YOLO／VLM 分頁那樣只影響自己這一分頁。
+不像 YOLO／VLM 分頁那樣只影響自己這一分頁。這正是它放在設定頁而不是 Viewer 的原因：
+Viewer 是「看結果」的頁面，把一顆會改變別人畫面的開關擺在那裡會讓人誤以為只動到自己。
+Viewer 面板頂端只留一行唯讀的「任務」說明與一顆連往設定頁的「變更」。
 
 ### 同時跑多個任務的代價
 
@@ -442,9 +446,10 @@ $env:YOLO_CLASSES = "person,backpack,fire extinguisher"   # 有值→開放詞�
 
 ### 1. 設定頁面（免重啟，即時生效）
 
-開 `/settings`（Recorder／Viewer 右上角點 **Settings** 按鈕）。填好欄位按 **套用**，
-透過 `POST /api/detector/config` 即時改 detector，不必重啟伺服器。狀態顯示「已套用」即成功；
-換模型後下一張影格才載入新權重，第一張會略慢。頁面上有完整「設置流程」說明。
+開 `/settings`（Recorder／Viewer 右上角點 **Settings** 按鈕）。這一頁是所有偵測器參數的唯一入口，
+分成兩塊：最上方的「任務通道」點一下**立即**送出 `POST /api/detector/task`；底下的表單填好欄位按
+**套用**，透過 `POST /api/detector/config` 即時改 detector。兩者都不必重啟伺服器。狀態顯示
+「已套用」即成功；換模型後下一張影格才載入新權重，第一張會略慢。頁面上有完整「設置流程」說明。
 
 > 注意：設定頁的變更是 runtime 狀態，伺服器重啟後會回到環境變數／預設值。要長期保留請用下面兩種。
 

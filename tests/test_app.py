@@ -115,15 +115,24 @@ def test_viewer_has_role_switch_and_recorder_link():
     assert "Open recorder" in response.text
 
 
-def test_viewer_exposes_detection_mode_switch():
+def test_viewer_has_no_detector_settings():
+    """The viewer shows results; the detector knobs all live on /settings.
+
+    Both the mode switch and the task chips are server-side global state (one
+    GPU worker per host), so a copy on the viewer would silently retune every
+    other tab. What stays is the read-only task line and its link out.
+    """
     app = create_app()
     with TestClient(app) as client:
         response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert 'id="modeGroup"' in response.text
-    assert 'data-detect-mode="fast"' in response.text
-    assert 'data-detect-mode="accurate"' in response.text
+    assert 'id="modeGroup"' not in response.text
+    assert "data-detect-mode=" not in response.text
+    assert "data-detect-task=" not in response.text
+    assert "data-task-tab=" not in response.text
+    assert 'id="taskHint"' in response.text
+    assert 'id="taskSettingsLink" href="/settings"' in response.text
 
 
 def test_detector_mode_can_be_switched():
@@ -163,6 +172,21 @@ def test_settings_page_loads():
     assert response.headers["cache-control"] == "no-store"
     assert 'id="settingsForm"' in response.text
     assert 'class="role-switch"' in response.text
+    assert 'id="modeGroup"' in response.text
+    assert 'data-detect-mode="fast"' in response.text
+    assert 'data-detect-mode="accurate"' in response.text
+
+
+def test_settings_page_exposes_task_switch():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/settings")
+
+    assert response.status_code == 200
+    assert 'data-task-tab="box"' in response.text
+    assert 'data-task-tab="raster"' in response.text
+    for task in ("detect", "segment", "pose", "obb", "openvocab", "semantic", "depth"):
+        assert f'data-detect-task="{task}"' in response.text
 
 
 def test_detector_config_round_trip():

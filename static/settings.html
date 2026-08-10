@@ -6,7 +6,7 @@
     <title>YOLO Elf Settings</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="/static/app.css?v=ui-8" />
+    <link rel="stylesheet" href="/static/app.css?v=ui-11" />
   </head>
   <body class="settings-page">
     <main class="settings-shell">
@@ -59,6 +59,105 @@
       </header>
 
       <div class="settings-body">
+        <!-- Applies on click, unlike the form below: the head set is a live
+             server-side switch (one GPU worker for the whole machine), so there
+             is nothing to stage and every viewer sees it at once.
+             Split into two tabs by what the head draws, because that is what
+             decides whether two heads can be shown at the same time:
+               · 物件疊加 — per-instance boxes/masks/skeletons that composite
+                 freely, so these are checkboxes and any mix may run at once.
+               · 整張畫面 — full-frame rasters; each repaints every pixel, so
+                 picking one clears the other. -->
+        <section class="settings-card" aria-labelledby="taskTitle">
+          <div class="panel-header">
+            <span class="panel-title" id="taskTitle">任務通道</span>
+            <span id="taskState" class="chip warn">載入中…</span>
+          </div>
+
+          <div id="taskSwitchProgress" class="switch-progress" role="status" aria-live="polite">
+            <span class="switch-label">切換模型中…</span>
+            <div class="progress-track"><div id="taskSwitchFill" class="progress-fill"></div></div>
+          </div>
+
+          <div class="task-control">
+            <div class="task-tabs" role="tablist" aria-label="任務類別">
+              <button
+                type="button"
+                role="tab"
+                id="taskTabBox"
+                data-task-tab="box"
+                aria-selected="true"
+                aria-controls="taskPanelBox"
+              >
+                物件疊加
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="taskTabRaster"
+                data-task-tab="raster"
+                aria-selected="false"
+                aria-controls="taskPanelRaster"
+              >
+                整張畫面
+              </button>
+            </div>
+            <div id="taskPanelBox" class="task-chips" role="tabpanel" aria-labelledby="taskTabBox">
+              <button type="button" class="task-chip" data-detect-task="detect" aria-pressed="true" title="物件偵測：方框 + 追蹤 + 區域 / 告警 / 歷史">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <rect x="3" y="5" width="11" height="9" rx="1"></rect>
+                  <rect x="11" y="11" width="10" height="8" rx="1"></rect>
+                </svg>
+                物件
+              </button>
+              <button type="button" class="task-chip" data-detect-task="segment" aria-pressed="false" title="實例分割：每個物件的輪廓多邊形">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M4 14c1-6 6-9 10-8s6 5 5 9-5 7-9 6-7-3-6-7z"></path>
+                  <path d="M8 13c.5-2.5 2.5-4 4.5-3.5"></path>
+                </svg>
+                分割
+              </button>
+              <button type="button" class="task-chip" data-detect-task="pose" aria-pressed="false" title="姿態估計：人體骨架關鍵點">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <circle cx="12" cy="4" r="2"></circle>
+                  <path d="M12 6v7M12 8l-4 3M12 8l4 3M12 13l-3 7M12 13l3 7"></path>
+                </svg>
+                姿態
+              </button>
+              <button type="button" class="task-chip" data-detect-task="obb" aria-pressed="false" title="旋轉框：可傾斜的方框（空拍 / 遙測常用）">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <rect x="5" y="7" width="14" height="10" rx="1" transform="rotate(-20 12 12)"></rect>
+                </svg>
+                旋轉框
+              </button>
+              <button type="button" class="task-chip" data-detect-task="openvocab" aria-pressed="false" title="開放詞彙（YOLOE-26）：用下面的「開放詞彙類別」文字提示自訂要找什麼">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <circle cx="11" cy="11" r="6"></circle>
+                  <path d="M20 20l-4.5-4.5M9 11h4M11 9v4"></path>
+                </svg>
+                開放詞彙
+              </button>
+            </div>
+            <div id="taskPanelRaster" class="task-chips" role="tabpanel" aria-labelledby="taskTabRaster" hidden>
+              <button type="button" class="task-chip" data-detect-task="semantic" aria-pressed="false" title="語意分割：整張畫面逐像素分類（無方框）">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M3 4h8v7H3zM11 4h10v7H11zM3 11h6v9H3zM9 11h12v9H9z"></path>
+                </svg>
+                語意
+              </button>
+              <button type="button" class="task-chip" data-detect-task="depth" aria-pressed="false" title="單目深度估計：逐像素距離（亮＝近，無方框）">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M3 20l9-16 9 16z"></path>
+                  <path d="M7.5 12h9M9.7 16h4.6"></path>
+                </svg>
+                深度
+              </button>
+            </div>
+            <p id="taskHint" class="settings-hint"></p>
+            <div id="taskError" class="error-line" hidden></div>
+          </div>
+        </section>
+
         <section class="settings-card" aria-labelledby="settingsTitle">
           <div class="panel-header">
             <span class="panel-title" id="settingsTitle">辨識設定</span>
@@ -174,15 +273,16 @@
             <span class="panel-title" id="guideTitle">設置流程</span>
           </div>
           <ol class="settings-steps">
+            <li><strong>選任務</strong>：最上面的「任務通道」決定偵測器跑哪幾顆頭，點一下立即生效、不必按套用。「物件疊加」分頁內可同時勾選多個（最多 4 個，每多一個就在同一張影格多跑一次推論）；「整張畫面」的語意與深度互斥。至少要留一個。</li>
             <li><strong>選模型</strong>：填入快速／精準模型檔名。一般物件用 <code>yolo26x.pt</code>（COCO 80 類，NMS-free）或 <code>yolov8x-oiv7.pt</code>（Open Images 600 類）；專用任務（人臉、車牌、安全帽）填下載好的 <code>.pt</code>。首次使用會自動下載權重。</li>
             <li><strong>開放詞彙（選用）</strong>：模型填 <code>yolov8x-worldv2.pt</code>，在「開放詞彙類別」輸入要偵測的詞，例如 <code>person, backpack</code>。</li>
             <li><strong>物種圖鑑（選用）</strong>：在「物種分類模型」填 <code>yolov8x-cls.pt</code>（ImageNet 1000 類），偵測框會再經第二段分類標出物種；「物種信心門檻」可過濾低信心的猜測。留空＝關閉。</li>
             <li><strong>調靈敏度</strong>：信心門檻越低召回越高、誤判越多；影像尺寸越大小物件越清楚但越慢。畫面物件很多時可調高「最多偵測框數」（預設 300）。</li>
             <li><strong>NMS-free（選用）</strong>：用 YOLO26 權重時維持「自動」即可；想與舊行為逐項比較，切到「關」會改走一對多頭部 + NMS，重疊框會被壓掉。這不是效能開關。</li>
             <li><strong>套用</strong>：按「套用」即時生效，不必重啟。換模型後下一張影格才載入新權重，第一張會略慢。</li>
-            <li><strong>確認</strong>：右上狀態顯示 <code>已套用</code> 即成功；在 Viewer 頁切到對應模式可看到效果。</li>
+            <li><strong>確認</strong>：右上狀態顯示 <code>已套用</code> 即成功；回 Viewer 頁即可看到效果。</li>
           </ol>
-          <p class="settings-hint">想開機就帶設定，可改用環境變數或 <code>run.ps1</code> 參數（見 <code>TUNING.md</code>）。右上角 Recorder／Viewer／Settings 按鈕可切換頁面。</p>
+          <p class="settings-hint">辨識參數集中在這一頁，Viewer 只負責顯示結果與現場操作（顯示過濾、ROI 區域、相機切換、存圖）。想開機就帶設定，可改用環境變數或 <code>run.ps1</code> 參數（見 <code>TUNING.md</code>）。右上角 Recorder／Viewer／Settings 按鈕可切換頁面。</p>
         </section>
 
         <section class="settings-card settings-about" aria-labelledby="aboutTitle">
