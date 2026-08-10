@@ -36,6 +36,7 @@
 - **多相機 / Multi-camera** — 以 `CAMERAS` 定義允許清單（如 `front:前門,back:後院`），每路各自擁有畫面佇列、追蹤器狀態、ROI 區域、告警冷卻與歷史紀錄；單一 GPU worker 以公平佇列輪流處理各路，Viewer 以格狀同時監看、點一格放大。留空＝單相機，行為與過去完全相同。
 - **多檢視端廣播 / Unlimited viewers** — 每路相機一次只有一個錄影端，但檢視端數量不限；檢視端可看全部或只訂閱其中一路（`/ws/viewer?camera_id=`）。
 - **檢視端過濾與存圖 / Viewer filters & snapshot** — Viewer 可切換顯示哪些類別、拉一條「最低信心」滑桿（純前端過濾，不動後端偵測），並一鍵「存圖」把當前含框畫面以原始解析度輸出成 PNG。純前端，無需設定或 API。
+- **播放器控制 / Player controls** — Viewer 畫面上有兩顆常駐按鍵：**暫停／繼續**凍結這個分頁的畫面方便細看（純前端，串流與偵測照常跑，其他 viewer 不受影響，繼續時直接跳到最新影格）；**錄影鈕**遙控錄影端開始／停止本機錄影（`POST /api/camera/recording`），按鍵狀態跟隨 `camera_recording`，所以在手機上自己按也會同步。
 - **錄影與中繼資料 / Recording & metadata** — 透過瀏覽器 `MediaRecorder` 錄影，可存本機、遠端或兩者，並附帶逐格偵測 `.detections.json` sidecar。
 - **存取控制 / Access control** — 選用的共享權杖驗證：設定 `AUTH_TOKEN` 後，頁面 / REST / WebSocket 都需驗證。瀏覽器在 `/login` 輸入權杖換取 HttpOnly 簽章 cookie（連 WS 一起認證，權杖不進網址或 log）；程式端可用 `Authorization: Bearer`。留空＝不啟用（維持現狀）。
 - **Prometheus 指標 / Prometheus metrics** — `GET /metrics` 以文字格式輸出既有指標（fps、延遲、丟幀、觀看人數、告警觸發數、活躍 sighting…），可直接接 Prometheus / Grafana。純讀取，可 `METRICS_ENABLED=0` 關閉。
@@ -320,6 +321,7 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `GET /api/zones` | 目前 ROI 區域。Query：`camera_id`（省略＝預設相機）；回應含全部相機的 `cameras` 對照。 |
 | `POST /api/zones` | 執行階段替換某一路的 ROI 區域。Body：`{"camera_id": "front", "zones": [...]}`；省略 `camera_id` 即預設相機，也可直接傳陣列。只影響指定的那一路。 |
 | `GET /api/events` | 查詢偵測出現紀錄。Query：`limit`、`since`、`until`（epoch 秒）、`label`、`zone`、`camera_id` / query sighting history. |
+| `POST /api/camera/recording` | 遙控錄影端開始／停止本機錄影。Body：`{"action": "start"}` 或 `{"action": "stop"}`，可加 `camera_id`（省略＝預設相機）。錄影端未連線回 409；能不能錄仍由錄影端決定（`RECORDING_ENABLED`、瀏覽器支援、儲存位置），真實狀態看 `/api/status` 的 `camera_recording`。 |
 | `POST /api/recordings` | 上傳錄影，依 `X-Yolo-Elf-Storage-Mode` 標頭路由儲存 / upload a recording. |
 | `POST /api/recordings/{id}/metadata` | 為錄影附加逐格偵測 sidecar / attach detection sidecar. |
 | `GET /api/recordings/{id}` | 下載已儲存的錄影 / download a recording. |

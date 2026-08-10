@@ -442,6 +442,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "streams": status["cameras"],
         }
 
+    @api.post("/api/camera/recording")
+    async def api_camera_recording(request: Request) -> dict[str, Any]:
+        """Remote start/stop of a recorder's local recording.
+
+        The viewer is often not the device holding the phone, so this is the
+        only way to catch something without walking over to it. The server only
+        relays: whether recording is allowed at all (`RECORDING_ENABLED`), which
+        storage the clip goes to and whether the browser can record are all
+        decided on the recorder, exactly as when its own button is pressed.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Recording command is invalid")
+        action = str(body.get("action") or "").strip().lower()
+        if action not in ("start", "stop"):
+            raise HTTPException(
+                status_code=400, detail=f"Recording action must be start or stop, got {action!r}"
+            )
+        camera_id = _resolve_camera(body.get("camera_id"))
+        delivered = await registry.send_camera_command(
+            camera_id, {"type": "command", "action": f"record_{action}"}
+        )
+        if not delivered:
+            raise HTTPException(
+                status_code=409, detail=f"No recorder is connected for camera {camera_id!r}"
+            )
+        return {"type": "camera_command", "camera_id": camera_id, "action": action}
+
     @api.get("/api/zones")
     async def api_zones_get(camera_id: str | None = None) -> dict[str, Any]:
         return {"type": "zones", "zones": zone_engine.snapshot(_resolve_camera(camera_id))}

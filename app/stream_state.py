@@ -299,6 +299,24 @@ class StreamRegistry:
                 if not await self._safe_send_json(viewer, event):
                     await self.remove_viewer(viewer)
 
+    async def send_camera_command(self, camera_id: str, payload: dict[str, Any]) -> bool:
+        """Push one control message to a camera client. False when none is connected.
+
+        The reverse direction of the frame stream, and deliberately fire-and-
+        forget: the recorder decides whether it can honour the command (storage
+        mode, permissions, an already-running recorder), and the truth comes back
+        the same way it always has — through `camera_recording` in the status.
+        """
+        async with self._lock:
+            channel = self.channels.get(camera_id)
+            camera = channel.camera_client if channel else None
+        if camera is None:
+            return False
+        if not await self._safe_send_json(camera, payload):
+            await self.clear_camera(camera, camera_id)
+            return False
+        return True
+
     async def broadcast_vlm(self, camera_id: str, payload: dict[str, Any]) -> None:
         """Publish a VLM channel result (out of band from frames) to viewers.
 

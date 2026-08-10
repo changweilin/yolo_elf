@@ -925,3 +925,50 @@ def test_invalid_recording_storage_mode_is_rejected(tmp_path, monkeypatch):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Recording storage mode is invalid"
+
+
+def test_viewer_page_exposes_player_controls():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'id="pauseButton"' in response.text
+    assert 'id="viewerRecordButton"' in response.text
+
+
+def test_recording_command_needs_a_connected_recorder():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post("/api/camera/recording", json={"action": "start"})
+
+    assert response.status_code == 409
+
+
+def test_recording_command_rejects_an_unknown_action():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post("/api/camera/recording", json={"action": "pause"})
+
+    assert response.status_code == 400
+
+
+def test_recording_command_rejects_an_unknown_camera():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/camera/recording", json={"action": "stop", "camera_id": "ghost"}
+        )
+
+    assert response.status_code == 400
+
+
+def test_recording_command_reaches_a_connected_recorder():
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/camera") as camera:
+            # The recorder is greeted with its config before anything else.
+            assert camera.receive_json()["type"] == "config"
+            response = client.post("/api/camera/recording", json={"action": "start"})
+            assert response.status_code == 200
+            assert camera.receive_json() == {"type": "command", "action": "record_start"}

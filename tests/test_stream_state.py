@@ -94,3 +94,41 @@ def test_send_latest_primes_new_viewer_with_vlm():
     asyncio.run(run())
     # No frames yet, so the only thing primed is the retained VLM payload.
     assert viewer.sent == [payload]
+
+
+def test_send_camera_command_reaches_the_recorder():
+    hub = StreamRegistry(get_settings())
+    camera = _FakeViewer()
+    command = {"type": "command", "action": "record_start"}
+
+    async def run():
+        await hub.set_camera(camera)
+        return await hub.send_camera_command("default", command)
+
+    assert asyncio.run(run()) is True
+    assert camera.sent == [command]
+
+
+def test_send_camera_command_without_a_recorder_reports_failure():
+    hub = StreamRegistry(get_settings())
+
+    async def run():
+        return await hub.send_camera_command("default", {"type": "command"})
+
+    assert asyncio.run(run()) is False
+
+
+def test_send_camera_command_drops_a_dead_recorder():
+    # The send is how we discover the socket is gone; leaving it registered
+    # would make the next status claim a recorder is still connected.
+    hub = StreamRegistry(get_settings())
+    camera = _FakeViewer(fail=True)
+
+    async def run():
+        await hub.set_camera(camera)
+        delivered = await hub.send_camera_command("default", {"type": "command"})
+        return delivered, hub.channels["default"].camera_client
+
+    delivered, client = asyncio.run(run())
+    assert delivered is False
+    assert client is None

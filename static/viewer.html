@@ -276,6 +276,45 @@
         <div id="errorLine" class="error-line" hidden></div>
         </div>
       </aside>
+
+      <!-- Player controls. On the stage rather than in the panel because the
+           panel is a collapsed bottom sheet on phones and half of it hides when
+           no box head runs; these two have to stay one tap away in both cases.
+           Placed after the panel in the DOM so CSS can hide them while the
+           sheet is open (they would be underneath it anyway). -->
+      <div class="hud playerbar" id="playerBar">
+        <button
+          id="pauseButton"
+          class="icon-button pause-toggle"
+          type="button"
+          aria-label="暫停畫面"
+          aria-pressed="false"
+          title="暫停畫面（串流繼續，只凍結顯示）"
+        >
+          <svg class="control-icon pause-icon-pause" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+            <rect x="7" y="5" width="3.5" height="14" rx="1"></rect>
+            <rect x="13.5" y="5" width="3.5" height="14" rx="1"></rect>
+          </svg>
+          <svg class="control-icon pause-icon-play" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+            <path d="M8 5v14l11-7z"></path>
+          </svg>
+        </button>
+        <button
+          id="viewerRecordButton"
+          class="icon-button record-toggle"
+          type="button"
+          aria-label="開始錄影"
+          aria-pressed="false"
+          title="遙控錄影端開始錄影"
+        >
+          <svg class="control-icon record-icon-start" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+            <circle cx="12" cy="12" r="6"></circle>
+          </svg>
+          <svg class="control-icon record-icon-stop" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+            <rect x="8" y="8" width="8" height="8" rx="1"></rect>
+          </svg>
+        </button>
+      </div>
     </main>
     <script type="module" src="/static/viewer.js?v=multitask-1"></script>
   </body>

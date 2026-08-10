@@ -634,6 +634,40 @@ input[type="range"] {
   display: block;
 }
 
+/* Viewer player controls: bottom-left of the stage, opposite the panel's
+   top-right corner on desktop. */
+.playerbar {
+  left: calc(16px + env(safe-area-inset-left));
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+}
+
+.pause-toggle .control-icon {
+  fill: currentColor;
+  stroke: currentColor;
+}
+
+.pause-toggle .pause-icon-play {
+  display: none;
+}
+
+.pause-toggle.is-paused {
+  color: var(--text);
+  border-color: var(--primary-border);
+  background: var(--primary-bg);
+}
+
+.pause-toggle.is-paused .pause-icon-pause {
+  display: none;
+}
+
+.pause-toggle.is-paused .pause-icon-play {
+  display: block;
+}
+
 .settings-toggle .control-icon {
   transition: transform 180ms ease;
 }
@@ -1388,6 +1422,26 @@ input[type="range"] {
   .settings-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;
+  }
+
+  /* The panel is a bottom sheet here, so the player bar sits just above the
+     collapsed header — and steps out of the way entirely once the sheet opens,
+     which is the only time it would be covered. */
+  .playerbar {
+    left: calc(12px + env(safe-area-inset-left));
+    bottom: calc(12px + env(safe-area-inset-bottom) + 74px);
+    padding: 6px;
+  }
+
+  .viewer-panel:not(.is-collapsed) ~ .playerbar {
+    display: none;
+  }
+
+  .playerbar .icon-button {
+    flex: 0 0 48px;
+    width: 48px;
+    min-width: 48px;
+    min-height: 48px;
   }
 }
 
