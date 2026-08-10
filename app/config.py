@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -35,6 +36,11 @@ BOX_TASKS = ("detect", "segment", "pose", "obb", "openvocab")
 # payload field, never the box list, so the downstream box consumers simply see
 # an empty frame rather than being fed something they cannot interpret.
 RASTER_TASKS = ("semantic", "depth")
+
+# How many heads may run on one frame. Every extra task is one more full model
+# pass on the single detection worker, so the frame rate drops roughly linearly;
+# the cap keeps a stray API call from stalling the stream outright.
+MAX_ACTIVE_TASKS = 4
 
 # Env var holding each task's model name. "detect" is absent: it keeps the
 # original two-preset YOLO_MODEL / YOLO_MODEL_ACCURATE pair.
@@ -132,6 +138,51 @@ def _list_env(name: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
+def parse_detect_tasks(raw: Any, primary: str) -> tuple[str, ...]:
+    """Normalise a set of heads to run on the same frame.
+
+    Accepts the comma-separated ``DETECT_TASKS`` string or an already-split
+    sequence (the runtime API path). Empty means "just ``primary``", which is
+    what keeps an unset ``DETECT_TASKS`` byte-for-byte identical to the previous
+    single-task behaviour.
+
+    Two raster heads are rejected rather than silently stacked: semantic and
+    depth each repaint every pixel, so the second would simply hide the first.
+    Box heads compose freely — the viewer draws each box from the fields it
+    carries, not from a task name.
+    """
+    if isinstance(raw, str) or raw is None:
+        entries = [item.strip().lower() for item in (raw or "").split(",") if item.strip()]
+    elif isinstance(raw, (list, tuple)):
+        entries = [str(item).strip().lower() for item in raw if str(item).strip()]
+    else:
+        raise ValueError("Detection tasks must be a list or a comma-separated string")
+
+    if not entries:
+        return (primary,)
+
+    tasks: list[str] = []
+    for task in entries:
+        if task not in DETECT_TASKS:
+            raise ValueError(
+                f"Detection task must be one of {', '.join(DETECT_TASKS)}, got {task!r}"
+            )
+        if task not in tasks:
+            tasks.append(task)
+
+    if len(tasks) > MAX_ACTIVE_TASKS:
+        raise ValueError(
+            f"At most {MAX_ACTIVE_TASKS} detection tasks may run at once, got {len(tasks)}"
+        )
+    rasters = [task for task in tasks if task in RASTER_TASKS]
+    if len(rasters) > 1:
+        raise ValueError(
+            "Only one full-frame task may run at once (each repaints every pixel), "
+            f"got {', '.join(rasters)}"
+        )
+    return tuple(tasks)
+
+
 def parse_cameras(raw: str, max_cameras: int) -> tuple[tuple[str, str], ...]:
     """Parse the ``CAMERAS`` allowlist into ``(camera_id, display_name)`` pairs.
 
@@ -184,6 +235,9 @@ class Settings:
     port: int
     detect_mode: str
     detect_task: str
+    # Every head that runs on a frame. Defaults to just `detect_task`, so an
+    # unset DETECT_TASKS is the previous single-head pipeline exactly.
+    detect_tasks: tuple[str, ...]
     yolo_model: str
     yolo_model_accurate: str
     # One model name per non-detect task, as (task, model) pairs. A tuple rather
@@ -270,6 +324,7 @@ class Settings:
 
 def get_settings() -> Settings:
     max_cameras = _bounded_int_env("MAX_CAMERAS", 4, 1, 16)
+    detect_task = _choice_env("DETECT_TASK", "detect", DETECT_TASKS)
     return Settings(
         host=os.getenv("HOST", "0.0.0.0"),
         port=_bounded_int_env("PORT", 8766, 1, 65535),
@@ -277,7 +332,10 @@ def get_settings() -> Settings:
         # Which head runs. "detect" keeps the original box-only pipeline; the
         # other entries swap in a task-specific checkpoint and add their own
         # payload fields. Switchable at runtime from the viewer's icon row.
-        detect_task=_choice_env("DETECT_TASK", "detect", DETECT_TASKS),
+        detect_task=detect_task,
+        # Opt-in multi-head: "detect,pose" runs both on every frame and merges
+        # the boxes. Unset = the single DETECT_TASK head, i.e. no extra cost.
+        detect_tasks=parse_detect_tasks(os.getenv("DETECT_TASKS"), detect_task),
         yolo_model=os.getenv("YOLO_MODEL", "yolo26s.pt"),
         yolo_model_accurate=os.getenv("YOLO_MODEL_ACCURATE", "yolo26x.pt"),
         task_models=tuple(

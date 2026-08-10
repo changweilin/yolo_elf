@@ -836,17 +836,44 @@ input[type="range"] {
   display: block;
 }
 
+/* The panel is taller than the viewport once every control is in it, so it is a
+   flex column with a scrolling body: the header (and its collapse toggle) stays
+   reachable and the panel never grows past the stage. */
 .viewer-panel {
   position: absolute;
   z-index: 3;
+  display: flex;
+  flex-direction: column;
   right: 16px;
   top: 88px;
   width: min(360px, calc(100vw - 32px));
+  max-height: calc(100vh - 112px);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-strong);
   box-shadow: 0 18px 42px var(--shadow);
   backdrop-filter: blur(16px);
+}
+
+@supports (height: 100dvh) {
+  .viewer-panel {
+    max-height: calc(100dvh - 112px);
+  }
+}
+
+.panel-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.viewer-panel.is-collapsed .panel-body {
+  display: none;
+}
+
+.viewer-panel.is-collapsed .panel-toggle .control-icon {
+  transform: rotate(180deg);
 }
 
 .panel-header {
@@ -857,6 +884,20 @@ input[type="range"] {
   min-height: 48px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
+}
+
+.viewer-panel.is-collapsed .panel-header {
+  border-bottom: 0;
+}
+
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel-toggle .control-icon {
+  transition: transform 180ms ease;
 }
 
 .panel-title {
@@ -880,44 +921,79 @@ input[type="range"] {
   gap: 8px;
 }
 
-.task-switch {
+.task-control {
+  gap: 8px;
+}
+
+.task-tabs {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: 1fr 1fr;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--control-bg);
 }
 
-.task-switch button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
+.task-tabs button {
   min-height: 34px;
-  padding: 0;
+  padding: 0 8px;
   border: 0;
   border-radius: 0;
   background: transparent;
   color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
-.task-switch button + button {
+.task-tabs button + button {
   border-left: 1px solid var(--line);
 }
 
-.task-switch button[aria-pressed="true"] {
+.task-tabs button[aria-selected="true"] {
   color: var(--text);
   background: var(--primary-bg);
 }
 
-.task-switch button:disabled {
-  opacity: 0.45;
+/* Multi-select, so these read as chips (like the class filter) rather than a
+   segmented control, which would imply exactly one choice. */
+.task-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.task-switch svg {
-  width: 17px;
-  height: 17px;
+.task-chips[hidden] {
+  display: none;
+}
+
+.task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  min-width: 0;
+  padding: 0 10px;
+  border-radius: 999px;
+  border-color: var(--line);
+  background: var(--control-bg);
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.task-chip[aria-pressed="true"] {
+  border-color: var(--primary-border);
+  background: var(--primary-bg);
+  color: var(--text);
+}
+
+.task-chip:disabled {
+  opacity: 0.4;
+}
+
+.task-chip svg {
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.7;
@@ -1008,7 +1084,9 @@ input[type="range"] {
   gap: 8px;
 }
 
-.camera-bar[hidden] {
+/* `.panel-control` sets display:flex, which would otherwise beat the `hidden`
+   attribute the task switch uses to drop the controls a task cannot use. */
+.panel-control[hidden] {
   display: none;
 }
 
@@ -1290,12 +1368,21 @@ input[type="range"] {
     width: auto;
   }
 
+  /* Bottom sheet: capped at just over half the screen so the stream stays
+     visible and readable behind it, and collapsed by default (viewer.js). */
   .viewer-panel {
     left: calc(12px + env(safe-area-inset-left));
     right: calc(12px + env(safe-area-inset-right));
     top: auto;
     bottom: calc(12px + env(safe-area-inset-bottom));
     width: auto;
+    max-height: 56vh;
+  }
+
+  @supports (height: 100dvh) {
+    .viewer-panel {
+      max-height: 56dvh;
+    }
   }
 
   .settings-row {

@@ -66,11 +66,19 @@ $env:YOLO_EXPORT = "onnx"   # 或 "engine"
 起始模式由 `DETECT_MODE` 決定（預設 `fast`）。切到精準模式後，下一張影格才會載入較大的模型，
 因此第一張的延遲會略高，之後維持快取不再重載。
 
-## 七種任務通道（圖示切換）
+## 七種任務通道（兩個分頁，可勾選並用）
 
-Viewer 右側面板最上方一排圖示按鍵切換偵測頭，或 `POST /api/detector/task`
+Viewer 右側面板最上方依「畫出來的東西」分成兩個分頁，或 `POST /api/detector/task`
 （`{"task": "segment"}`），或啟動時 `DETECT_TASK`。每個頭是各自的權重，切換時在背景載入，
 進度沿用「切換模型中…」進度條；各頭的權重**各自快取**，切回去不用重載。
+
+- **物件疊加**：`detect`／`segment`／`pose`／`obb`／`openvocab`。都是掛在單一物件上的框、
+  輪廓與骨架，疊在同一張畫面上互不衝突，所以做成**勾選**，愛開幾個就開幾個。
+- **整張畫面**：`semantic`／`depth`。兩者都逐像素重畫整張圖，第二個只會蓋掉第一個，
+  所以勾一個會自動取消另一個。
+
+分頁只決定「現在看到哪一組晶片」，不影響誰在跑：`detect` + `depth` 這種跨分頁組合是合法的
+（深度圖打底、方框疊上去）。至少要留一個任務啟用，最後一個取消不掉。
 
 | 任務 | 預設權重 | 額外輸出 | 進區域／告警／歷史？ |
 | --- | --- | --- | --- |
@@ -89,8 +97,28 @@ Ultralytics 算好的軸對齊 `xyxy`，下游吃 `xyxy`、疊圖畫 `obb`，兩
 **語意與深度沒有方框**，因此 `/api/status` 會回 `detector.emits_boxes: false`，區域／告警／
 歷史在這兩個任務下看到的是空白幀——這是刻意的，不是壞掉。
 
-⚠️ 任務是**伺服器端**的單一設定（全機只有一個 GPU worker），切換會影響**所有** viewer，
-不像 YOLO／VLM 分頁那樣只影響自己這一分頁。需要同時取得兩種輸出，只能開兩個伺服器實例。
+⚠️ 任務是**伺服器端**的設定（全機只有一個 GPU worker），切換會影響**所有** viewer，
+不像 YOLO／VLM 分頁那樣只影響自己這一分頁。
+
+### 同時跑多個任務的代價
+
+勾選多個任務時，worker 會在**同一張影格上依序**跑每個頭——GPU 本來就是序列化的，所以成本是
+相加而不是相抵：
+
+- `detector.inference_ms` 回報的是**總和**，另有 `task_ms` 逐一列出每個頭花多久。
+  實測（CPU、`IMG_SIZE=320`、`bus.jpg`）：`detect` 97 ms + `pose` 55 ms；換成
+  `depth` 單獨就要 2276 ms——重的頭一個就能吃掉整個預算，勾之前先看 `task_ms`。
+- 上限 4 個頭（`MAX_ACTIVE_TASKS`）。到頂後其他晶片會變灰；`semantic`／`depth` 例外，
+  因為它們是互換而不是追加。
+- 有效幀率大約是「單一任務幀率 ÷ 任務數」。要維持流暢，優先降 `FRAME_FPS` 或 `IMG_SIZE`，
+  不要期待多開任務還能維持原本的延遲。
+- 起始組合用 `DETECT_TASKS=detect,pose`（留空＝只跑 `DETECT_TASK`，與過去逐位元相同）。
+
+**方框合併規則**：所有頭的方框併成同一份 `boxes` 清單，每個框多帶一個 `task` 欄位。
+`class_id` 與 `track_id` **只在自己的頭裡唯一**（`detect` 的 class 0 是人、`obb` 的 class 0
+是飛機；兩個頭的追蹤器都從 #1 開始編號），所以 Viewer 在多任務時會把任務名寫進標籤
+（`姿態·#1 person 88%`），配色也按任務錯開。區域／告警／歷史吃的是合併後的清單，
+會同時看到多個頭對同一個物件的框——只需要一份時，就只勾 `detect`。
 
 ### 幾個實務注意事項
 
@@ -401,7 +429,7 @@ $env:YOLO_CLASSES = "person,backpack,fire extinguisher"   # 有值→開放詞�
 
 ### 3. 環境變數（永久 / CI）
 
-`DETECT_TASK`、`DETECT_MODE`、`YOLO_MODEL`、`YOLO_MODEL_ACCURATE`、各任務的 `YOLO_MODEL_*`、
+`DETECT_TASK`、`DETECT_TASKS`、`DETECT_MODE`、`YOLO_MODEL`、`YOLO_MODEL_ACCURATE`、各任務的 `YOLO_MODEL_*`、
 `RASTER_MAX_SIZE`、`YOLO_CLASSES`、`CONF_THRESH`、`IMG_SIZE`、`YOLO_MAX_DET`、`YOLO_END2END`、
 `YOLO_TRACK`、`YOLO_TRACKER`，細節見 `README.md` 的環境變數表。
 

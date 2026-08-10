@@ -1,12 +1,13 @@
 import pytest
 
-from app.config import get_settings
+from app.config import get_settings, parse_detect_tasks
 
 
 SETTINGS_ENV = [
     "PORT",
     "DETECT_MODE",
     "DETECT_TASK",
+    "DETECT_TASKS",
     "YOLO_MODEL_SEGMENT",
     "YOLO_MODEL_POSE",
     "YOLO_MODEL_OBB",
@@ -222,6 +223,44 @@ def test_task_defaults_keep_the_original_detect_pipeline(monkeypatch):
         "semantic": "yolo26s-sem.pt",
         "depth": "yolo26s-depth.pt",
     }
+
+
+def test_detect_tasks_defaults_to_the_single_task(monkeypatch):
+    clear_settings_env(monkeypatch)
+    monkeypatch.setenv("DETECT_TASK", "obb")
+
+    # Unset DETECT_TASKS = one head, i.e. the previous pipeline exactly.
+    assert get_settings().detect_tasks == ("obb",)
+
+
+def test_detect_tasks_parses_a_multi_head_list(monkeypatch):
+    clear_settings_env(monkeypatch)
+    monkeypatch.setenv("DETECT_TASKS", " detect , POSE ,detect ")
+
+    # Case and padding normalise; a repeat is folded rather than run twice.
+    assert get_settings().detect_tasks == ("detect", "pose")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "detect,sorcery",
+        "semantic,depth",  # two full-frame rasters cannot both be drawn
+        "detect,segment,pose,obb,openvocab",  # over MAX_ACTIVE_TASKS
+    ],
+)
+def test_detect_tasks_rejects_impossible_sets(monkeypatch, raw):
+    clear_settings_env(monkeypatch)
+    monkeypatch.setenv("DETECT_TASKS", raw)
+
+    with pytest.raises(ValueError):
+        get_settings()
+
+
+def test_parse_detect_tasks_accepts_a_sequence(monkeypatch):
+    # The runtime API hands in an already-split list rather than a string.
+    assert parse_detect_tasks(["Depth", " detect "], "detect") == ("depth", "detect")
+    assert parse_detect_tasks([], "pose") == ("pose",)
 
 
 def test_task_models_are_overridable_per_task(monkeypatch):
