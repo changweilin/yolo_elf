@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from app.config import DETECT_TASKS, get_settings
+from app.config import DETECT_TASKS, MAX_ACTIVE_TASKS, get_settings
 from app.detector import (
+    DecodedImage,
     YoloDetector,
     clamp_xyxy,
     detection_error_payload,
@@ -23,6 +24,7 @@ def _detector(monkeypatch):
     for name in (
         "DETECT_MODE",
         "DETECT_TASK",
+        "DETECT_TASKS",
         "YOLO_MODEL",
         "YOLO_MODEL_ACCURATE",
         "YOLO_CLASSES",
@@ -702,6 +704,90 @@ def test_set_task_rejects_unknown_task(monkeypatch):
     detector = _detector(monkeypatch)
     with pytest.raises(ValueError):
         detector.set_task("nonsense")
+
+
+def test_single_task_status_keeps_the_original_shape(monkeypatch):
+    # The multi-head fields are additive: a lone task still reports itself as
+    # `task`, and `tasks` is just that one entry.
+    status = _detector(monkeypatch).status()
+    assert status["task"] == "detect"
+    assert status["tasks"] == ["detect"]
+    assert status["max_active_tasks"] == MAX_ACTIVE_TASKS
+
+
+def test_set_tasks_runs_several_heads(monkeypatch):
+    detector = _detector(monkeypatch)
+    status = detector.update_config({"tasks": ["pose", "depth"]})
+
+    assert status["tasks"] == ["pose", "depth"]
+    # The first entry is the primary head every single-task client still reads.
+    assert status["task"] == "pose"
+    assert status["emits_boxes"] is True
+    assert status["emits_raster"] is True
+
+
+def test_set_tasks_rejects_two_rasters(monkeypatch):
+    # Each raster repaints every pixel, so the second would just hide the first.
+    detector = _detector(monkeypatch)
+    with pytest.raises(ValueError):
+        detector.set_tasks(["semantic", "depth"])
+
+
+def test_set_task_collapses_back_to_one_head(monkeypatch):
+    detector = _detector(monkeypatch)
+    detector.set_tasks(["detect", "pose"])
+    detector.set_task("obb")
+    assert detector.tasks == ("obb",)
+
+
+def test_loaded_requires_every_active_head(monkeypatch):
+    detector = _detector(monkeypatch)
+    detector.set_tasks(["detect", "pose"])
+    detector._models[FAST] = _FakeClosedModel()
+    assert detector.loaded is False
+    detector._models["pose"] = _FakeClosedModel()
+    assert detector.loaded is True
+
+
+def test_detect_merges_every_head_into_one_payload(monkeypatch):
+    # Two heads on one frame: the boxes concatenate, each tagged with the head
+    # that produced it (track ids only mean anything within one head), and the
+    # reported inference time is the sum of the passes.
+    detector = _detector(monkeypatch)
+    detector.set_tasks(["detect", "pose"])
+    monkeypatch.setattr(
+        detector, "_decode_jpeg", lambda _raw: DecodedImage(data="frame", width=100, height=80)
+    )
+    monkeypatch.setattr(detector, "_ensure_model", lambda task=None: task)
+    results = {
+        "detect": _FakeDetectResult([_FakeResultBox([1, 2, 3, 4], 0, 0.9, track_id=1)]),
+        "pose": _FakeDetectResult([_FakeResultBox([5, 6, 7, 8], 0, 0.8, track_id=1)]),
+    }
+    monkeypatch.setattr(detector, "_infer", lambda _model, _src, task=None: [results[task]])
+    detector._names_by_preset = {FAST: {0: "person"}, "pose": {0: "person"}}
+
+    payload = detector.detect(b"jpeg", 7)
+
+    assert payload["tasks"] == ["detect", "pose"]
+    assert [box["task"] for box in payload["boxes"]] == ["detect", "pose"]
+    assert set(payload["task_ms"]) == {"detect", "pose"}
+    assert payload["inference_ms"] == pytest.approx(
+        sum(payload["task_ms"].values()), abs=0.05
+    )
+
+
+def test_detect_omits_the_task_breakdown_for_one_head(monkeypatch):
+    detector = _detector(monkeypatch)
+    monkeypatch.setattr(
+        detector, "_decode_jpeg", lambda _raw: DecodedImage(data="frame", width=10, height=10)
+    )
+    monkeypatch.setattr(detector, "_ensure_model", lambda task=None: task)
+    monkeypatch.setattr(detector, "_infer", lambda *_args, **_kwargs: [_FakeDetectResult([])])
+
+    payload = detector.detect(b"jpeg", 1)
+
+    assert payload["tasks"] == ["detect"]
+    assert "task_ms" not in payload
 
 
 def test_raster_tasks_report_no_boxes(monkeypatch):

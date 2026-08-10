@@ -25,7 +25,7 @@
 - **快速 / 精準雙模式 / Fast & Accurate presets** — 可在小型快速模型與大型高精度模型間即時切換（Viewer 的「快速 / 精準」切換或 `POST /api/detector/mode`），無需重啟。
 - **執行階段調參 / Runtime tuning** — Settings 頁面可即時修改模型、類別、信心門檻與影像尺寸，立即生效。
 - **YOLO26 與 NMS-free 推論 / YOLO26 & NMS-free inference** — 預設模型為 YOLO26（`yolo26s.pt` / `yolo26x.pt`），其一對一頭部直接輸出去重後的框、不跑 NMS，因此沒有 `iou` 門檻要調、匯出的圖也不含後處理節點。`YOLO_END2END=auto|on|off` 可強制切換頭部（`auto` 沿用權重預設；YOLOv8／v11 等無此頭部的模型會忽略此設定），`YOLO_MAX_DET` 調整每幀框數上限。**注意：在本專案的 PyTorch 推論路徑上，NMS-free 本身不會變快**（實測見 `TUNING.md`）；速度紅利主要出現在匯出後的 ONNX／邊緣執行環境。
-- **七種任務通道 / Seven task heads** — Viewer 右側一排圖示按鍵即時切換偵測頭，換頭即換權重、不必重啟：**物件偵測**（方框）、**實例分割**（輪廓多邊形）、**姿態估計**（COCO-17 骨架）、**旋轉框 OBB**（可傾斜方框）、**開放詞彙**（YOLOE-26，用 `YOLO_CLASSES` 文字提示決定要找什麼）、**語意分割**與**單目深度**（逐像素圖層，疊在畫面上，深度附公尺範圍）。前五種仍輸出方框，因此追蹤 / 區域 / 告警 / 歷史照常運作；語意與深度沒有方框，那些功能會看到空白幀（設計如此）。預設 `detect`，行為與過去完全相同。
+- **七種任務通道 / Seven task heads** — Viewer 右側面板依輸出性質分成「物件疊加」與「整張畫面」兩個分頁，勾選即時切換偵測頭，換頭即換權重、不必重啟。同一分頁內的任務可以**同時勾選**（最多 4 個，每多一個就在同一張影格多跑一次推論，延遲近似倍增）；「整張畫面」的兩種逐像素圖層互斥，勾一個會取消另一個。可選的任務：**物件偵測**（方框）、**實例分割**（輪廓多邊形）、**姿態估計**（COCO-17 骨架）、**旋轉框 OBB**（可傾斜方框）、**開放詞彙**（YOLOE-26，用 `YOLO_CLASSES` 文字提示決定要找什麼）、**語意分割**與**單目深度**（逐像素圖層，疊在畫面上，深度附公尺範圍）。前五種仍輸出方框，因此追蹤 / 區域 / 告警 / 歷史照常運作；語意與深度沒有方框，那些功能會看到空白幀（設計如此）。預設 `detect`，行為與過去完全相同。
 - **多物件追蹤 / Multi-object tracking** — 內建六種追蹤器（ByteTrack / BoT-SORT / TrackTrack / FastTrack / OC-SORT / Deep OC-SORT），跨影格為每個物件維持穩定 `track_id`，標籤以 `#id` 顯示、錄影中繼資料一併記錄；以 `YOLO_TRACKER` 選擇，可 `YOLO_TRACK=0` 關閉。
 - **偵測歷史 / Detection history** — 以 `track_id` 為單位把每個物件聚合成一筆「出現紀錄」（首/末出現、停留秒數、經過的區域、最高信心），寫入本機 SQLite，`/history` 頁面可依類別 / 區域 / 時間範圍查詢。需 `YOLO_TRACK`（預設開），可 `EVENT_LOG_ENABLED=0` 關閉。
 - **開放詞彙偵測 / Open-vocabulary detection** — 支援 YOLO-World / YOLOE 模型，以文字提示（如 `person,backpack,fire extinguisher`）自訂偵測類別。
@@ -219,7 +219,8 @@ Behaviour is driven by environment variables. The most common ones:
 | `CAMERAS` | _(空 / empty)_ | 多相機允許清單，逗號分隔的 `id` 或 `id:顯示名`。範例：`front:前門,back:後院`。留空＝單一隱含的 `default` 相機（行為與過去完全相同）。錄影端只能宣告清單內的 id，避免任意 id 灌爆伺服器，也讓 Viewer 版面在相機離線時保持穩定。偵測參數（preset / 信心 / 類別）全域共用；ROI 區域、告警與歷史則各自獨立。 |
 | `MAX_CAMERAS` | `4` | `CAMERAS` 的數量上限（1–16）。超過即啟動失敗。先用 `scripts/bench_detector.py` 量測單卡吞吐再往上調。 |
 | `DETECT_MODE` | `fast` | 啟動時的偵測 preset：`fast`（用 `YOLO_MODEL`）或 `accurate`（用 `YOLO_MODEL_ACCURATE`）。可在執行階段由 Viewer 的「快速 / 精準」切換或 `POST /api/detector/mode` 變更。 |
-| `DETECT_TASK` | `detect` | 啟動時的偵測頭：`detect`、`segment`、`pose`、`obb`、`openvocab`、`semantic`、`depth`。可在 Viewer 的圖示按鍵或 `POST /api/detector/task` 即時切換。前五種輸出方框（追蹤／區域／告警／歷史照常）；`semantic`／`depth` 只輸出逐像素圖層，方框為空。 |
+| `DETECT_TASK` | `detect` | 啟動時的偵測頭：`detect`、`segment`、`pose`、`obb`、`openvocab`、`semantic`、`depth`。可在 Viewer 的任務分頁或 `POST /api/detector/task` 即時切換。前五種輸出方框（追蹤／區域／告警／歷史照常）；`semantic`／`depth` 只輸出逐像素圖層，方框為空。 |
+| `DETECT_TASKS` | _(空 / empty)_ | 同時執行的偵測頭清單，逗號分隔，例如 `detect,pose`。留空＝只跑 `DETECT_TASK` 一個頭（行為與過去完全相同）。每多一個頭就多跑一次推論，延遲近似線性增加；上限 4 個。`semantic` 與 `depth` 都會重畫整張畫面，只能擇一，同時填寫即啟動失敗。方框會合併成一份清單，每個框帶 `task` 欄位標明來源（不同頭的 `track_id` 各自編號，不可互相比對）。 |
 | `YOLO_MODEL_SEGMENT` | `yolo26s-seg.pt` | `segment` 任務的模型（實例分割）。 |
 | `YOLO_MODEL_POSE` | `yolo26s-pose.pt` | `pose` 任務的模型（COCO-17 關鍵點）。 |
 | `YOLO_MODEL_OBB` | `yolo26s-obb.pt` | `obb` 任務的模型（旋轉框，DOTA 類別，多為空拍視角）。 |
@@ -311,7 +312,7 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `GET /api/status` | 完整執行階段快照：串流統計、偵測器狀態、錄影、遠端儲存。頂層數字是全機彙總，`cameras` 為各路明細；`camera_id` 參數選擇 `zones` 要回哪一路。 |
 | `GET /api/cameras` | 相機允許清單、預設相機與各路串流狀態 / configured cameras and their stream state. |
 | `POST /api/detector/mode` | 切換 preset。Body：`{"mode": "fast"}` 或 `{"mode": "accurate"}`。 |
-| `POST /api/detector/task` | 切換偵測頭。Body：`{"task": "segment"}`（`detect`／`segment`／`pose`／`obb`／`openvocab`／`semantic`／`depth`）。新權重在背景載入，可輪詢 `/api/status` 的 `detector.loaded`。 |
+| `POST /api/detector/task` | 切換偵測頭。Body：`{"task": "segment"}` 只跑一個頭；`{"tasks": ["detect", "pose"]}` 同時跑多個（最多 4 個，`semantic`／`depth` 擇一，違反即 400）。兩者同時給則以 `tasks` 為準。新權重在背景載入，可輪詢 `/api/status` 的 `detector.loaded`（多頭時全部載完才為 `true`）。 |
 | `GET /api/detector/config` | 目前偵測器設定 / current detector configuration. |
 | `POST /api/detector/config` | 執行階段更新設定（部分更新，只變更傳入的鍵）。可傳 `mode`、`task`、`task_models`（如 `{"pose": "yolo26x-pose.pt"}`）、`fast_model`、`accurate_model`、`classes`、`conf_thresh`、`img_size`、`max_det`、`end2end`（`auto`/`on`/`off`）、`classifier_model`、`classifier_min_conf`、`classifier_max_boxes`。 |
 | `GET /api/alerts` | 目前告警規則與觸發狀態 / current alert rules and firing state. |

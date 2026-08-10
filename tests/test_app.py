@@ -219,6 +219,31 @@ def test_detector_task_switch_round_trip():
         assert client.get("/api/status").json()["detector"]["task"] == "depth"
 
 
+def test_detector_multi_task_switch_round_trip():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post("/api/detector/task", json={"tasks": ["detect", "depth"]})
+        assert response.status_code == 200
+        detector = response.json()["detector"]
+        assert detector["tasks"] == ["detect", "depth"]
+        # Both sides of the payload are live: boxes from detect, raster from depth.
+        assert detector["emits_boxes"] is True
+        assert detector["emits_raster"] is True
+        assert client.get("/api/status").json()["detector"]["tasks"] == ["detect", "depth"]
+
+        # The single-task contract still collapses the set back to one head.
+        detector = client.post("/api/detector/task", json={"task": "pose"}).json()["detector"]
+        assert detector["tasks"] == ["pose"]
+
+
+def test_detector_multi_task_switch_rejects_two_rasters():
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post("/api/detector/task", json={"tasks": ["semantic", "depth"]})
+    assert response.status_code == 400
+    assert "one full-frame task" in response.json()["detail"]
+
+
 def test_detector_task_switch_rejects_unknown_task():
     app = create_app()
     with TestClient(app) as client:

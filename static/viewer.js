@@ -16,6 +16,8 @@ const droppedMetric = document.querySelector("#droppedMetric");
 const recordingMetric = document.querySelector("#recordingMetric");
 const uploadMetric = document.querySelector("#uploadMetric");
 const errorLine = document.querySelector("#errorLine");
+const viewerPanel = document.querySelector("#viewerPanel");
+const panelToggle = document.querySelector("#panelToggle");
 const modeGroup = document.querySelector("#modeGroup");
 const modeButtons = modeGroup
   ? Array.from(modeGroup.querySelectorAll("[data-detect-mode]"))
@@ -32,13 +34,34 @@ const channelButtons = channelGroup
 const vlmCaption = document.querySelector("#vlmCaption");
 
 // Task switch (detect / segment / pose / obb / open-vocab / semantic / depth).
-// Unlike the channel toggle this one *is* server-side: it swaps which head the
-// single detection worker runs, so it affects every viewer at once.
-const taskGroup = document.querySelector("#taskGroup");
-const taskButtons = taskGroup
-  ? Array.from(taskGroup.querySelectorAll("[data-detect-task]"))
-  : [];
+// Unlike the channel toggle this one *is* server-side: it swaps which heads the
+// single detection worker runs, so it affects every viewer at once. Several may
+// run at once — each extra head is another model pass on the same frame.
+const taskButtons = Array.from(document.querySelectorAll("[data-detect-task]"));
+const taskTabs = Array.from(document.querySelectorAll("[data-task-tab]"));
+const taskPanels = {
+  box: document.querySelector("#taskPanelBox"),
+  raster: document.querySelector("#taskPanelRaster"),
+};
+const taskHint = document.querySelector("#taskHint");
+const viewFilterControl = document.querySelector("#viewFilterControl");
+const zoneEditorControl = document.querySelector("#zoneEditorControl");
 const rasterLegend = document.querySelector("#rasterLegend");
+
+// Mirrors app/config.py. Only one raster head may run at a time (each repaints
+// every pixel), and the order here is the order tasks are sent to the server.
+const BOX_TASKS = ["detect", "segment", "pose", "obb", "openvocab"];
+const RASTER_TASKS = ["semantic", "depth"];
+const TASK_ORDER = [...BOX_TASKS, ...RASTER_TASKS];
+const TASK_LABELS = {
+  detect: "物件",
+  segment: "分割",
+  pose: "姿態",
+  obb: "旋轉框",
+  openvocab: "開放詞彙",
+  semantic: "語意",
+  depth: "深度",
+};
 
 // COCO-17 limb pairs, 0-indexed (Ultralytics publishes them 1-indexed).
 const POSE_SKELETON = [
@@ -187,6 +210,9 @@ const state = {
   // Mirrors the server's active detect preset so the task switch can restart
   // the progress bar without inventing a mode.
   detectMode: "fast",
+  // Every head the server is running, newest status wins. Never empty.
+  tasks: ["detect"],
+  maxTasks: 4,
   zonesByCamera: {},
   editor: { active: false, draft: [] },
   // Viewer-only display filters (never touch the backend / detector).
@@ -760,14 +786,26 @@ function setChannel(channel) {
   updateVlmCaption();
 }
 
-function renderModel(detector) {
+// `authoritative` marks the reply to the newest task switch: it may write the
+// task chips even while another request is still open. Everything else (the
+// status poll, the mode switch) leaves them alone until the air is clear.
+function renderModel(detector, authoritative = false) {
   const modelText = detector.loaded ? detector.model : "model not loaded";
   setChip(modelStatus, modelText, detector.last_load_error ? "bad" : detector.loaded ? "good" : "warn");
   if (detector.mode) {
     state.detectMode = detector.mode;
   }
   renderDetectMode(detector.mode);
-  renderDetectTask(detector.task);
+  if (Number.isFinite(detector.max_active_tasks)) {
+    state.maxTasks = detector.max_active_tasks;
+  }
+  // Skip while a switch is in flight: this status is older than the click that
+  // has not been answered yet, so applying it would flicker the chips back.
+  if (!authoritative && taskRequestsInFlight > 0) {
+    return;
+  }
+  // `tasks` is the multi-head list; older servers only report `task`.
+  renderDetectTask(detector.tasks || (detector.task ? [detector.task] : []));
 }
 
 function renderDetectMode(mode) {
@@ -798,38 +836,123 @@ async function setDetectMode(mode) {
   }
 }
 
-function renderDetectTask(task) {
-  if (!task) {
+function renderDetectTask(tasks) {
+  if (!Array.isArray(tasks) || tasks.length === 0) {
     return;
   }
+  state.tasks = tasks;
+  const active = new Set(tasks);
+  const atCap = tasks.length >= state.maxTasks;
   for (const button of taskButtons) {
-    button.setAttribute("aria-pressed", button.dataset.detectTask === task ? "true" : "false");
+    const task = button.dataset.detectTask;
+    const on = active.has(task);
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+    // A raster chip is never capped out: picking it replaces the other raster
+    // rather than adding a pass, so the cap cannot be what blocks it.
+    button.disabled = !on && atCap && !RASTER_TASKS.includes(task);
   }
   // Fast/accurate is a detect-only axis: the other heads have a single
   // checkpoint each, so the toggle would be a no-op that looks like a control.
-  modeGroup?.classList.toggle("is-disabled", task !== "detect");
+  const hasDetect = active.has("detect");
+  modeGroup?.classList.toggle("is-disabled", !hasDetect);
   for (const button of modeButtons) {
-    button.disabled = task !== "detect";
+    button.disabled = !hasDetect;
+  }
+  // Drop the controls the running heads cannot feed: class filter and minimum
+  // confidence act on boxes, ROI zones only ever apply to plain detect.
+  const emitsBoxes = tasks.some((entry) => BOX_TASKS.includes(entry));
+  if (viewFilterControl) {
+    viewFilterControl.hidden = !emitsBoxes;
+  }
+  if (zoneEditorControl) {
+    zoneEditorControl.hidden = !hasDetect;
+    if (!hasDetect && state.editor.active) {
+      setEditor(false);
+    }
+  }
+  renderTaskHint();
+}
+
+function renderTaskHint() {
+  if (!taskHint) {
+    return;
+  }
+  const names = state.tasks.map((task) => TASK_LABELS[task] || task).join("＋");
+  taskHint.textContent =
+    state.tasks.length > 1
+      ? `同時執行 ${names}：每格影像跑 ${state.tasks.length} 次推論，延遲約為單一任務的 ${state.tasks.length} 倍。`
+      : `執行 ${names}。可再勾選其他任務同時疊加，代價是每多一項就多跑一次推論。`;
+}
+
+// Which tab's chips are on screen. Purely a display choice: a task stays active
+// while its tab is hidden, so a raster underlay can run beneath box overlays.
+function setTaskTab(name) {
+  for (const tab of taskTabs) {
+    tab.setAttribute("aria-selected", tab.dataset.taskTab === name ? "true" : "false");
+  }
+  for (const [key, panel] of Object.entries(taskPanels)) {
+    if (panel) {
+      panel.hidden = key !== name;
+    }
   }
 }
 
+// Checkbox semantics: toggling never replaces the whole set, except between the
+// two rasters, which cannot both be drawn. The last active task cannot be
+// switched off — the worker always runs something.
+function nextTasks(task) {
+  const active = new Set(state.tasks);
+  if (active.has(task)) {
+    if (active.size === 1) {
+      return null;
+    }
+    active.delete(task);
+  } else {
+    if (RASTER_TASKS.includes(task)) {
+      for (const other of RASTER_TASKS) {
+        active.delete(other);
+      }
+    } else if (active.size >= state.maxTasks) {
+      return null;
+    }
+    active.add(task);
+  }
+  return TASK_ORDER.filter((entry) => active.has(entry));
+}
+
+// Chips are toggled far faster than a round trip, and each POST answers with the
+// set *it* installed. Without a sequence number the reply to an older click
+// would repaint the chips over a newer one — and so would the 1 Hz status poll.
+// Only the newest request is allowed to write the task UI.
+let taskRequestSeq = 0;
+let taskRequestsInFlight = 0;
+
 async function setDetectTask(task) {
-  renderDetectTask(task);
+  const tasks = nextTasks(task);
+  if (!tasks) {
+    return;
+  }
+  renderDetectTask(tasks);
   // Each task is its own checkpoint, so reuse the model-switch progress bar.
   modelSwitch.begin(state.detectMode || "fast");
-  setChip(modelStatus, `switching to ${task}…`, "warn");
+  setChip(modelStatus, `switching to ${tasks.join("+")}…`, "warn");
+  taskRequestSeq += 1;
+  taskRequestsInFlight += 1;
+  const seq = taskRequestSeq;
   try {
     const response = await fetch("/api/detector/task", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ task }),
+      body: JSON.stringify({ tasks }),
     });
     if (response.ok) {
       const payload = await response.json();
-      renderModel(payload.detector || {});
+      renderModel(payload.detector || {}, seq === taskRequestSeq);
     }
   } catch {
     // The status poll will reconcile the chips on the next tick.
+  } finally {
+    taskRequestsInFlight -= 1;
   }
 }
 
@@ -1097,11 +1220,17 @@ function drawBoxes(ctx, detection, fit) {
   ctx.font = "600 14px system-ui, sans-serif";
   ctx.textBaseline = "top";
 
+  // With several heads on one frame, both class ids and track ids are only
+  // unique *within* a head — detect's class 0 is a person, obb's is a plane, and
+  // each head's tracker numbers from 1. So the task joins the colour key and is
+  // spelled out in the label; with a single head nothing changes.
+  const multiTask = (detection.tasks || []).length > 1;
+
   for (const box of detection.boxes || []) {
     if (!isBoxVisible(box)) {
       continue;
     }
-    const color = colorForClass(box.class_id);
+    const color = colorForClass(box.class_id, box.task);
     const [x1, y1, x2, y2] = box.xyxy;
     const left = fit.x + x1 * fit.scale;
     const top = fit.y + y1 * fit.scale;
@@ -1115,10 +1244,11 @@ function drawBoxes(ctx, detection, fit) {
     // primary label (圖鑑); otherwise fall back to the detection class. A
     // tracker id (when present) is prefixed so an object is followable.
     // Ids are per-camera: #3 on one pane is unrelated to #3 on another.
+    const taskTag = multiTask && box.task ? `${TASK_LABELS[box.task] || box.task}·` : "";
     const idPrefix = box.track_id != null ? `#${box.track_id} ` : "";
     const label = box.species
-      ? `${idPrefix}${box.species} ${Math.round((box.species_confidence ?? 0) * 100)}%`
-      : `${idPrefix}${box.label} ${(box.confidence * 100).toFixed(0)}%`;
+      ? `${taskTag}${idPrefix}${box.species} ${Math.round((box.species_confidence ?? 0) * 100)}%`
+      : `${taskTag}${idPrefix}${box.label} ${(box.confidence * 100).toFixed(0)}%`;
 
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
@@ -1224,9 +1354,12 @@ function fitContain(stageWidth, stageHeight, sourceWidth, sourceHeight) {
   };
 }
 
-function colorForClass(classId) {
+// `task` offsets the palette so two heads' class 0 do not land on the same
+// colour. Omitted (the single-head path) it reproduces the original mapping.
+function colorForClass(classId, task) {
   const colors = ["#48d597", "#64c7ff", "#f0bd49", "#ff6b6b", "#c6a8ff", "#79e0d0"];
-  return colors[Math.abs(Number(classId || 0)) % colors.length];
+  const offset = task ? TASK_ORDER.indexOf(task) : 0;
+  return colors[Math.abs(Number(classId || 0) + Math.max(offset, 0)) % colors.length];
 }
 
 // ROI zones are stored normalized (0..1) to the source frame, so map them onto
@@ -1517,6 +1650,48 @@ async function pollStatus() {
   }
 }
 
+// The metrics panel holds every viewer control, which is taller than a phone
+// screen. Collapsing it to its header keeps the stream (and the zone editor's
+// click target) reachable; the choice is remembered per browser.
+const PANEL_STORAGE_KEY = "yolo-elf-viewer-panel";
+
+function setPanelExpanded(expanded, persist = true) {
+  viewerPanel?.classList.toggle("is-collapsed", !expanded);
+  if (panelToggle) {
+    const label = expanded ? "收合面板" : "展開面板";
+    panelToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    panelToggle.setAttribute("aria-label", label);
+    panelToggle.title = label;
+  }
+  if (!persist) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(PANEL_STORAGE_KEY, expanded ? "open" : "closed");
+  } catch {
+    // The preference is per-view when localStorage is unavailable.
+  }
+}
+
+function initialPanelExpanded() {
+  try {
+    const saved = window.localStorage.getItem(PANEL_STORAGE_KEY);
+    if (saved === "open" || saved === "closed") {
+      return saved === "open";
+    }
+  } catch {
+    // Fall through to the width default.
+  }
+  // Matches the 720px breakpoint where the panel becomes a bottom sheet.
+  return window.matchMedia
+    ? !window.matchMedia("(max-width: 720px)").matches
+    : window.innerWidth > 720;
+}
+
+panelToggle?.addEventListener("click", () => {
+  setPanelExpanded(Boolean(viewerPanel?.classList.contains("is-collapsed")));
+});
+
 for (const button of modeButtons) {
   button.addEventListener("click", () => setDetectMode(button.dataset.detectMode));
 }
@@ -1539,6 +1714,9 @@ stage.addEventListener("click", onStageClick);
 for (const button of taskButtons) {
   button.addEventListener("click", () => setDetectTask(button.dataset.detectTask));
 }
+for (const tab of taskTabs) {
+  tab.addEventListener("click", () => setTaskTab(tab.dataset.taskTab));
+}
 
 viewerMinConf?.addEventListener("input", (event) => setViewerMinConf(event.target.value));
 saveFrameButton?.addEventListener("click", saveSnapshot);
@@ -1549,6 +1727,8 @@ window.addEventListener("beforeunload", releaseImageUrls);
 // Bootstrap with the single implicit pane so the first paint (and the entire
 // single-camera path) needs no round trip; /api/status reconciles the rest.
 syncPanes([]);
+setPanelExpanded(initialPanelExpanded(), false);
+renderDetectTask(state.tasks);
 renderClassChips();
 if (viewerMinConf) {
   setViewerMinConf(viewerMinConf.value);

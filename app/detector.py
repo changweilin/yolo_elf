@@ -12,10 +12,12 @@ from app.config import (
     BOX_TASKS,
     DETECT_MODES,
     DETECT_TASKS,
+    MAX_ACTIVE_TASKS,
     END2END_FLAGS,
     END2END_MODES,
     RASTER_TASKS,
     Settings,
+    parse_detect_tasks,
 )
 
 
@@ -117,7 +119,10 @@ class YoloDetector:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._mode = settings.detect_mode
-        self._task = settings.detect_task
+        # `_tasks` is the running set; `_task` is its first entry, kept as the
+        # single-task view every existing caller (and payload) still reads.
+        self._tasks: tuple[str, ...] = settings.detect_tasks
+        self._task = self._tasks[0]
         # Runtime-mutable detector config (seeded from settings, then editable via
         # update_config / the settings page without restarting the server).
         self._model_names: dict[str, str] = {
@@ -192,8 +197,13 @@ class YoloDetector:
         return self._task
 
     @property
+    def tasks(self) -> tuple[str, ...]:
+        return self._tasks
+
+    @property
     def loaded(self) -> bool:
-        return self._models.get(self._preset_key()) is not None
+        """True once *every* active head has its weights in memory."""
+        return all(self._models.get(self._preset_key(task)) is not None for task in self._tasks)
 
     def _preset_key(self, task: str | None = None, mode: str | None = None) -> str:
         """Cache key identifying one set of weights.
@@ -210,10 +220,11 @@ class YoloDetector:
     def _model_name_for_mode(self, mode: str) -> str:
         return self._model_names.get(mode, self._model_names["fast"])
 
-    def _model_name_for_preset(self) -> str:
-        if self._task == "detect":
+    def _model_name_for_preset(self, task: str | None = None) -> str:
+        resolved = self._task if task is None else task
+        if resolved == "detect":
             return self._model_name_for_mode(self._mode)
-        return self._task_model_names.get(self._task, "")
+        return self._task_model_names.get(resolved, "")
 
     def models_by_mode(self) -> dict[str, str]:
         return {mode: self._model_name_for_mode(mode) for mode in DETECT_MODES}
@@ -235,14 +246,26 @@ class YoloDetector:
         return normalized
 
     def set_task(self, task: Any) -> str:
-        """Switch which head runs. Weights load lazily on the next frame."""
+        """Switch to exactly one head. Weights load lazily on the next frame."""
         normalized = str(task).strip().lower() if task is not None else ""
         if normalized not in DETECT_TASKS:
             raise ValueError(
                 f"Detection task must be one of {', '.join(DETECT_TASKS)}, got {task!r}"
             )
+        self._tasks = (normalized,)
         self._task = normalized
         return normalized
+
+    def set_tasks(self, tasks: Any) -> tuple[str, ...]:
+        """Set every head that runs on a frame, in draw order.
+
+        The first entry stays the "primary" task reported as ``task``: it owns
+        the fast/accurate axis and is what a single-task client sees.
+        """
+        resolved = parse_detect_tasks(tasks, self._task)
+        self._tasks = resolved
+        self._task = resolved[0]
+        return resolved
 
     def update_config(self, payload: Any) -> dict[str, Any]:
         """Apply a partial detector config at runtime. Returns the new status.
@@ -259,6 +282,8 @@ class YoloDetector:
             self.set_mode(payload["mode"])
         if payload.get("task") is not None:
             self.set_task(payload["task"])
+        if payload.get("tasks") is not None:
+            self.set_tasks(payload["tasks"])
         if payload.get("task_models") is not None:
             self._set_task_models(payload["task_models"])
         if payload.get("conf_thresh") is not None:
@@ -495,10 +520,14 @@ class YoloDetector:
             # The task axis. `emits_boxes` is what viewers and the docs key off:
             # false means zones / alerts / history see an empty frame by design.
             "task": self._task,
+            "tasks": list(self._tasks),
             "available_tasks": list(DETECT_TASKS),
+            "box_tasks": list(BOX_TASKS),
+            "raster_tasks": list(RASTER_TASKS),
+            "max_active_tasks": MAX_ACTIVE_TASKS,
             "task_models": self.models_by_task(),
-            "emits_boxes": self._task in BOX_TASKS,
-            "emits_raster": self._task in RASTER_TASKS,
+            "emits_boxes": any(task in BOX_TASKS for task in self._tasks),
+            "emits_raster": any(task in RASTER_TASKS for task in self._tasks),
             "configured_classes": list(self._classes),
             "open_vocabulary": self._open_vocab_applied.get(preset, False),
             "loaded": self.loaded,
@@ -555,43 +584,65 @@ class YoloDetector:
         other key gets its own model instance so track ids stay per-stream.
         """
         decoded = self._decode_jpeg(jpeg_bytes)
-        model = self._ensure_model()
-        # Snapshot the task alongside the names: a runtime task switch racing the
-        # worker must not make us read this frame's result with the other head's
-        # extractor (e.g. looking for `.obb` on a pose result).
-        task = self._task
-        names = self._names_by_preset.get(self._preset_key(task), {})
-        if tracker_key is not None and self._track_enabled and task in BOX_TASKS:
-            model = self._ensure_tracker_model(tracker_key)
-
-        started = time.perf_counter()
-        try:
-            results = self._infer(model, decoded.data, task)
-        except Exception as exc:
-            raise DetectionError(f"YOLO inference failed: {exc}") from exc
-
-        inference_ms = (time.perf_counter() - started) * 1000.0
-        result = results[0]
+        # Snapshot the running set: a runtime task switch racing the worker must
+        # not make us read this frame's result with another head's extractor
+        # (e.g. looking for `.obb` on a pose result).
+        tasks = self._tasks
         payload: dict[str, Any] = {
             "frame_id": frame_id,
             "width": decoded.width,
             "height": decoded.height,
-            "inference_ms": round(inference_ms, 2),
-            "task": task,
+            "inference_ms": 0.0,
+            "task": tasks[0],
+            "tasks": list(tasks),
             "boxes": [],
         }
 
-        if task in RASTER_TASKS:
-            # No boxes at all for these heads — the raster *is* the result.
-            raster = self._extract_raster(result, task, names)
-            if raster is not None:
-                payload["raster"] = raster
-            return payload
+        # One pass per head, sequentially on this worker thread — the GPU is
+        # serialized anyway, so the frame's cost is the sum and `inference_ms`
+        # reports exactly that. `task_ms` breaks it down so the viewer can show
+        # which head is expensive.
+        boxes: list[dict[str, Any]] = []
+        task_ms: dict[str, float] = {}
+        total_ms = 0.0
+        for task in tasks:
+            model = self._ensure_model(task)
+            names = self._names_by_preset.get(self._preset_key(task), {})
+            if tracker_key is not None and self._track_enabled and task in BOX_TASKS:
+                model = self._ensure_tracker_model(tracker_key, task)
 
-        boxes = self._extract_boxes(result, decoded.width, decoded.height, names, task)
+            started = time.perf_counter()
+            try:
+                results = self._infer(model, decoded.data, task)
+            except Exception as exc:
+                raise DetectionError(f"YOLO inference failed for task {task!r}: {exc}") from exc
+            elapsed = (time.perf_counter() - started) * 1000.0
+            task_ms[task] = round(elapsed, 2)
+            total_ms += elapsed
+
+            result = results[0]
+            if task in RASTER_TASKS:
+                # No boxes at all for these heads — the raster *is* the result.
+                # parse_detect_tasks admits at most one, so this never overwrites.
+                raster = self._extract_raster(result, task, names)
+                if raster is not None:
+                    payload["raster"] = raster
+                continue
+
+            head_boxes = self._extract_boxes(result, decoded.width, decoded.height, names, task)
+            # Track ids are only unique within one head's tracker, so tag each
+            # box with its origin: two heads both reporting `track_id` 1 are
+            # different objects, and the viewer keys its labels off this.
+            for box in head_boxes:
+                box["task"] = task
+            boxes.extend(head_boxes)
+
         if boxes and self._classifier_name:
             self._classify_boxes(boxes, decoded.data, decoded.width, decoded.height)
         payload["boxes"] = boxes
+        payload["inference_ms"] = round(total_ms, 2)
+        if len(tasks) > 1:
+            payload["task_ms"] = task_ms
         return payload
 
     def warmup(self) -> dict[str, Any]:
@@ -602,11 +653,14 @@ class YoloDetector:
         try:
             import numpy as np
 
-            model = self._ensure_model()
             warmup_size = min(max(self._img_size, 32), 1280)
             source = np.zeros((warmup_size, warmup_size, 3), dtype=np.uint8)
-            for _ in range(self.settings.yolo_warmup_runs):
-                self._predict(model, source)
+            # Every active head, or the first frame still pays the lazy cost for
+            # whichever ones warmup skipped.
+            for task in self._tasks:
+                model = self._ensure_model(task)
+                for _ in range(self.settings.yolo_warmup_runs):
+                    self._predict(model, source, task)
             self._synchronize_device()
         except Exception as exc:
             self._last_warmup_error = f"YOLO warmup failed: {exc}"
@@ -647,17 +701,18 @@ class YoloDetector:
         no frames are streaming. Load failures are recorded in ``last_load_error``
         and swallowed so the caller never has to handle an exception.
         """
-        try:
-            self._ensure_model()
-        except Exception:  # noqa: BLE001 - reported via last_load_error
-            pass
+        for task in self._tasks:
+            try:
+                self._ensure_model(task)
+            except Exception:  # noqa: BLE001 - reported via last_load_error
+                pass
         # Warm the second-stage classifier too (no-op when disabled). It never
         # raises; load failures surface via `last_classifier_error` in status.
         self._ensure_classifier()
         return self.status()
 
-    def _ensure_model(self) -> Any:
-        preset = self._preset_key()
+    def _ensure_model(self, task: str | None = None) -> Any:
+        preset = self._preset_key(task)
         cached = self._models.get(preset)
         if cached is not None:
             self._names = self._names_by_preset.get(preset, {})
@@ -683,9 +738,9 @@ class YoloDetector:
                 self._half_enabled = self.settings.yolo_half and device_supports_half(self._device)
                 self._device_resolved = True
 
-            model_name = self._model_name_for_preset()
+            model_name = self._model_name_for_preset(task)
             if not model_name:
-                self._load_error = f"No model configured for task {self._task!r}"
+                self._load_error = f"No model configured for task {task or self._task!r}"
                 raise DetectionError(self._load_error)
             load_name = self._resolve_model_source(model_name)
             try:
@@ -711,7 +766,7 @@ class YoloDetector:
             self._load_error = None
             return model
 
-    def _ensure_tracker_model(self, tracker_key: str) -> Any:
+    def _ensure_tracker_model(self, tracker_key: str, task: str | None = None) -> Any:
         """Lazily build the dedicated model instance backing one extra stream.
 
         Loads the same artifact the primary model resolved to, so an exported
@@ -719,7 +774,7 @@ class YoloDetector:
         ``_load_lock`` with :meth:`_ensure_model` since both compete for the same
         weights on disk / device memory.
         """
-        preset = self._preset_key()
+        preset = self._preset_key(task)
         cache_key = (preset, tracker_key)
         cached = self._tracker_models.get(cache_key)
         if cached is not None:
@@ -736,7 +791,7 @@ class YoloDetector:
                 self._load_error = f"YOLO dependencies are not installed: {exc}"
                 raise DetectionError(self._load_error) from exc
 
-            load_name = self._loaded_sources.get(preset, self._model_name_for_preset())
+            load_name = self._loaded_sources.get(preset, self._model_name_for_preset(task))
             try:
                 model = YOLO(load_name)
                 self._apply_open_vocabulary(model)

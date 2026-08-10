@@ -6,7 +6,7 @@
     <title>YOLO Elf Viewer</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="/static/app.css?v=ui-8" />
+    <link rel="stylesheet" href="/static/app.css?v=ui-10" />
   </head>
   <body>
     <main class="viewer-shell">
@@ -81,61 +81,116 @@
         </div>
       </header>
 
-      <aside class="viewer-panel">
+      <aside class="viewer-panel" id="viewerPanel">
         <div class="panel-header">
           <span class="panel-title">Stream metrics</span>
-          <a href="/recorder" target="_blank" rel="noreferrer">
-            <button type="button">Open recorder</button>
-          </a>
+          <div class="panel-header-actions">
+            <a href="/recorder" target="_blank" rel="noreferrer">
+              <button type="button">Open recorder</button>
+            </a>
+            <!-- The panel is taller than a phone viewport, so it collapses to
+                 just this header; on narrow screens it starts collapsed. -->
+            <button
+              id="panelToggle"
+              class="icon-button panel-toggle"
+              type="button"
+              aria-controls="viewerPanelBody"
+              aria-expanded="true"
+              aria-label="收合面板"
+              title="收合面板"
+            >
+              <svg class="control-icon" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                <path d="m6 15 6-6 6 6"></path>
+              </svg>
+            </button>
+          </div>
         </div>
-        <div class="panel-control panel-control-stacked">
-          <span class="panel-control-label">任務</span>
-          <!-- Server-side head switch: unlike the YOLO/VLM channel toggle this
-               changes what the single detection worker runs, for every viewer.
-               Icon-only to fit seven options in the panel width; the accessible
-               name lives on aria-label with the same text in the tooltip. -->
-          <div id="taskGroup" class="task-switch" role="group" aria-label="偵測任務">
-            <button type="button" data-detect-task="detect" aria-pressed="true" aria-label="物件偵測" title="物件偵測：方框 + 追蹤 + 區域 / 告警 / 歷史">
+        <div class="panel-body" id="viewerPanelBody">
+        <!-- Server-side head switch: unlike the YOLO/VLM channel toggle this
+             changes what the single detection worker runs, for every viewer.
+             Split into two tabs by what the head draws, because that is what
+             decides whether two heads can be shown at the same time:
+               · 物件疊加 — per-instance boxes/masks/skeletons that composite
+                 freely, so these are checkboxes and any mix may run at once.
+               · 整張畫面 — full-frame rasters; each repaints every pixel, so
+                 picking one clears the other.
+             Only the chips of the open tab are on screen, which is what keeps
+             the row readable now that there are seven of them. -->
+        <div class="panel-control panel-control-stacked task-control">
+          <div class="task-tabs" role="tablist" aria-label="任務類別">
+            <button
+              type="button"
+              role="tab"
+              id="taskTabBox"
+              data-task-tab="box"
+              aria-selected="true"
+              aria-controls="taskPanelBox"
+            >
+              物件疊加
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="taskTabRaster"
+              data-task-tab="raster"
+              aria-selected="false"
+              aria-controls="taskPanelRaster"
+            >
+              整張畫面
+            </button>
+          </div>
+          <div id="taskPanelBox" class="task-chips" role="tabpanel" aria-labelledby="taskTabBox">
+            <button type="button" class="task-chip" data-detect-task="detect" aria-pressed="true" title="物件偵測：方框 + 追蹤 + 區域 / 告警 / 歷史">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <rect x="3" y="5" width="11" height="9" rx="1"></rect>
                 <rect x="11" y="11" width="10" height="8" rx="1"></rect>
               </svg>
+              物件
             </button>
-            <button type="button" data-detect-task="segment" aria-pressed="false" aria-label="實例分割" title="實例分割：每個物件的輪廓多邊形">
+            <button type="button" class="task-chip" data-detect-task="segment" aria-pressed="false" title="實例分割：每個物件的輪廓多邊形">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M4 14c1-6 6-9 10-8s6 5 5 9-5 7-9 6-7-3-6-7z"></path>
                 <path d="M8 13c.5-2.5 2.5-4 4.5-3.5"></path>
               </svg>
+              分割
             </button>
-            <button type="button" data-detect-task="pose" aria-pressed="false" aria-label="姿態估計" title="姿態估計：人體骨架關鍵點">
+            <button type="button" class="task-chip" data-detect-task="pose" aria-pressed="false" title="姿態估計：人體骨架關鍵點">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <circle cx="12" cy="4" r="2"></circle>
                 <path d="M12 6v7M12 8l-4 3M12 8l4 3M12 13l-3 7M12 13l3 7"></path>
               </svg>
+              姿態
             </button>
-            <button type="button" data-detect-task="obb" aria-pressed="false" aria-label="旋轉框偵測" title="旋轉框：可傾斜的方框（空拍 / 遙測常用）">
+            <button type="button" class="task-chip" data-detect-task="obb" aria-pressed="false" title="旋轉框：可傾斜的方框（空拍 / 遙測常用）">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <rect x="5" y="7" width="14" height="10" rx="1" transform="rotate(-20 12 12)"></rect>
               </svg>
+              旋轉框
             </button>
-            <button type="button" data-detect-task="openvocab" aria-pressed="false" aria-label="開放詞彙" title="開放詞彙（YOLOE-26）：用「開放詞彙類別」文字提示自訂要找什麼">
+            <button type="button" class="task-chip" data-detect-task="openvocab" aria-pressed="false" title="開放詞彙（YOLOE-26）：用「開放詞彙類別」文字提示自訂要找什麼">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <circle cx="11" cy="11" r="6"></circle>
                 <path d="M20 20l-4.5-4.5M9 11h4M11 9v4"></path>
               </svg>
+              開放詞彙
             </button>
-            <button type="button" data-detect-task="semantic" aria-pressed="false" aria-label="語意分割" title="語意分割：整張畫面逐像素分類（無方框）">
+          </div>
+          <div id="taskPanelRaster" class="task-chips" role="tabpanel" aria-labelledby="taskTabRaster" hidden>
+            <button type="button" class="task-chip" data-detect-task="semantic" aria-pressed="false" title="語意分割：整張畫面逐像素分類（無方框）">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M3 4h8v7H3zM11 4h10v7H11zM3 11h6v9H3zM9 11h12v9H9z"></path>
               </svg>
+              語意
             </button>
-            <button type="button" data-detect-task="depth" aria-pressed="false" aria-label="深度估計" title="單目深度估計：逐像素距離（亮＝近，無方框）">
+            <button type="button" class="task-chip" data-detect-task="depth" aria-pressed="false" title="單目深度估計：逐像素距離（亮＝近，無方框）">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M3 20l9-16 9 16z"></path>
                 <path d="M7.5 12h9M9.7 16h4.6"></path>
               </svg>
+              深度
             </button>
           </div>
+          <p id="taskHint" class="settings-hint"></p>
         </div>
         <div class="panel-control">
           <span class="panel-control-label">辨識模式</span>
@@ -188,7 +243,9 @@
           <span class="panel-control-label">相機</span>
           <div id="cameraTabs" class="filter-chips"></div>
         </div>
-        <div class="panel-control view-filter">
+        <!-- Box-only controls: hidden while no box head runs, since a class
+             filter and an ROI both act on boxes that would not exist. -->
+        <div id="viewFilterControl" class="panel-control view-filter">
           <div class="view-filter-head">
             <span class="panel-control-label">顯示過濾</span>
             <button id="saveFrameButton" type="button" class="compact-button">存圖</button>
@@ -201,7 +258,7 @@
           </label>
           <p id="saveFrameHint" class="settings-hint" hidden></p>
         </div>
-        <div class="panel-control zone-editor">
+        <div id="zoneEditorControl" class="panel-control zone-editor">
           <div class="zone-editor-head">
             <span class="panel-control-label">ROI 區域</span>
             <button id="zoneEditToggle" type="button" class="compact-button">編輯</button>
@@ -217,8 +274,9 @@
           <ul id="zoneList" class="zone-list"></ul>
         </div>
         <div id="errorLine" class="error-line" hidden></div>
+        </div>
       </aside>
     </main>
-    <script type="module" src="/static/viewer.js?v=vlm-2"></script>
+    <script type="module" src="/static/viewer.js?v=multitask-1"></script>
   </body>
 </html>

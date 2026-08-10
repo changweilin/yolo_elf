@@ -357,8 +357,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             body = None
         task = body.get("task") if isinstance(body, dict) else None
+        # `tasks` (a list) runs several heads on every frame and wins when both
+        # are present; `task` remains the original single-head contract.
+        tasks = body.get("tasks") if isinstance(body, dict) else None
         try:
-            detector.set_task(task)
+            if tasks is not None:
+                detector.set_tasks(tasks)
+            else:
+                detector.set_task(task)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         # Same background preload as the mode switch: each task has its own
