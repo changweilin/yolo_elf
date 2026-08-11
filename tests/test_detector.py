@@ -13,6 +13,7 @@ from app.detector import (
     device_supports_half,
     model_supports_end2end,
 )
+from helpers import settings_from
 
 
 # Cache key for the default preset. Model caches are keyed by task (with the
@@ -20,24 +21,8 @@ from app.detector import (
 FAST = "detect:fast"
 
 
-def _detector(monkeypatch):
-    for name in (
-        "DETECT_MODE",
-        "DETECT_TASK",
-        "DETECT_TASKS",
-        "YOLO_MODEL",
-        "YOLO_MODEL_ACCURATE",
-        "YOLO_CLASSES",
-        "YOLO_TRACK",
-        "YOLO_TRACKER",
-        "YOLO_END2END",
-        "YOLO_MAX_DET",
-        "YOLO_EXPORT",
-        "CLASSIFIER_MODEL",
-        "CLASSIFIER_MIN_CONF",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    return YoloDetector(get_settings())
+def _detector(monkeypatch, **env):
+    return YoloDetector(settings_from(monkeypatch, **env))
 
 
 def test_export_target_is_a_pure_path_decision():

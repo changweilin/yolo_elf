@@ -4,47 +4,21 @@ import json
 import httpx
 import pytest
 
-from app.alerts import AlertEngine, build_rules, parse_alert_rules
-from app.config import get_settings
+from app.alerts import AlertEngine, parse_alert_rules
 from app.stream_state import CameraFrame
-
-
-ALERT_ENV = ["ALERT_RULES", "ALERT_WEBHOOK_URL", "ALERT_WEBHOOK_TOKEN", "ALERT_COOLDOWN_SEC"]
-
-
-def _clear(monkeypatch):
-    for name in ALERT_ENV:
-        monkeypatch.delenv(name, raising=False)
+from helpers import box as _box
+from helpers import detection as _detection
+from helpers import settings_from
 
 
 def _engine(monkeypatch, rules=None, **env):
-    _clear(monkeypatch)
     if rules is not None:
-        monkeypatch.setenv("ALERT_RULES", json.dumps(rules))
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    return AlertEngine(get_settings())
+        env["ALERT_RULES"] = json.dumps(rules)
+    return AlertEngine(settings_from(monkeypatch, **env))
 
 
 def _frame():
     return CameraFrame(frame_id=1, jpeg=b"jpeg", received_at=1710000000.0)
-
-
-def _detection(boxes, frame_id=1, error=None):
-    detection = {
-        "frame_id": frame_id,
-        "width": 100,
-        "height": 100,
-        "inference_ms": 5.0,
-        "boxes": boxes,
-    }
-    if error is not None:
-        detection["error"] = error
-    return detection
-
-
-def _box(label, confidence=0.9, track_id=None):
-    return {"label": label, "confidence": confidence, "track_id": track_id}
 
 
 # --- rule parsing / validation -------------------------------------------------
@@ -215,11 +189,12 @@ def test_set_rules_rejects_invalid(monkeypatch):
 
 
 def test_webhook_posts_fired_alert(monkeypatch):
-    _clear(monkeypatch)
-    monkeypatch.setenv("ALERT_RULES", json.dumps([{"name": "person", "classes": ["person"], "cooldown_sec": 0}]))
-    monkeypatch.setenv("ALERT_WEBHOOK_URL", "https://hooks.example/alert")
-    monkeypatch.setenv("ALERT_WEBHOOK_TOKEN", "secret")
-    settings = get_settings()
+    settings = settings_from(
+        monkeypatch,
+        ALERT_RULES=json.dumps([{"name": "person", "classes": ["person"], "cooldown_sec": 0}]),
+        ALERT_WEBHOOK_URL="https://hooks.example/alert",
+        ALERT_WEBHOOK_TOKEN="secret",
+    )
     requests = []
 
     def handler(request):

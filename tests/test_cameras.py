@@ -13,55 +13,14 @@ import sqlite3
 import pytest
 
 from app.alerts import AlertEngine
-from app.config import DEFAULT_CAMERA_ID, get_settings, parse_cameras
+from app.config import DEFAULT_CAMERA_ID, parse_cameras
 from app.events import EventStore, SightingAggregator
 from app.stream_state import StreamRegistry
 from app.zones import ZoneEngine
-
-CAMERA_ENV = ["CAMERAS", "MAX_CAMERAS", "ZONES", "ALERT_RULES", "ALERT_COOLDOWN_SEC"]
-
-
-@pytest.fixture(autouse=True)
-def clear_camera_env(monkeypatch):
-    for name in CAMERA_ENV:
-        monkeypatch.delenv(name, raising=False)
-
-
-def _settings(monkeypatch, **env):
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    return get_settings()
-
-
-def _detection(boxes, error=None):
-    detection = {"frame_id": 1, "width": 100, "height": 100, "boxes": boxes}
-    if error is not None:
-        detection["error"] = error
-    return detection
-
-
-def _box(label="person", confidence=0.9, track_id=1, xyxy=None, zones=None):
-    return {
-        "label": label,
-        "confidence": confidence,
-        "track_id": track_id,
-        "xyxy": xyxy or [10.0, 10.0, 30.0, 30.0],
-        "zones": zones or [],
-    }
-
-
-class _FakeViewer:
-    """Minimal viewer websocket: records JSON/binary sends."""
-
-    def __init__(self):
-        self.json = []
-        self.binary = []
-
-    async def send_json(self, payload):
-        self.json.append(payload)
-
-    async def send_bytes(self, payload):
-        self.binary.append(payload)
+from helpers import FakeViewer as _FakeViewer
+from helpers import box as _box
+from helpers import detection as _detection
+from helpers import settings_from as _settings
 
 
 # --- config -------------------------------------------------------------------
@@ -227,8 +186,8 @@ def test_zones_are_scoped_per_camera(monkeypatch):
         )
     )
 
-    front = engine.annotate(_detection([_box()]), "front")
-    back = engine.annotate(_detection([_box()]), "back")
+    front = engine.annotate(_detection([_box(track_id=1)]), "front")
+    back = engine.annotate(_detection([_box(track_id=1)]), "back")
 
     assert front["boxes"][0]["zones"] == ["door"]
     assert back["boxes"][0]["zones"] == ["yard"]
@@ -283,7 +242,7 @@ def test_alert_cooldown_is_per_camera(monkeypatch):
             ALERT_COOLDOWN_SEC="3600",
         )
     )
-    detection = _detection([_box()])
+    detection = _detection([_box(track_id=1)])
 
     async def run():
         front = await engine.process(None, detection, "front")
@@ -308,7 +267,7 @@ def test_alert_rule_can_be_pinned_to_one_camera(monkeypatch):
             ),
         )
     )
-    detection = _detection([_box()])
+    detection = _detection([_box(track_id=1)])
 
     async def run():
         return (

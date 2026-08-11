@@ -1,24 +1,19 @@
 import asyncio
 
-from app.config import get_settings
 from app.events import EventStore, SightingAggregator
-
-
-def _detection(boxes, error=None):
-    detection = {"frame_id": 1, "width": 100, "height": 100, "boxes": boxes}
-    if error is not None:
-        detection["error"] = error
-    return detection
-
-
-def _box(label, confidence=0.9, track_id=1, zones=None):
-    return {"label": label, "confidence": confidence, "track_id": track_id, "zones": zones or []}
+from helpers import box as _box
+from helpers import detection as _detection
+from helpers import settings_from
 
 
 def _store(monkeypatch, tmp_path, enabled=True):
-    monkeypatch.setenv("EVENT_LOG_ENABLED", "1" if enabled else "0")
-    monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
-    return EventStore(get_settings())
+    return EventStore(
+        settings_from(
+            monkeypatch,
+            EVENT_LOG_ENABLED="1" if enabled else "0",
+            EVENT_DB_PATH=tmp_path / "events.db",
+        )
+    )
 
 
 # --- aggregation --------------------------------------------------------------

@@ -165,11 +165,14 @@ Open the printed `https://<machine>.<tailnet>.ts.net/` URL on the phone and take
 ### 執行測試 / Run the tests
 
 ```powershell
-.\scripts\run-tests.ps1
+npm test
 ```
 
-測試腳本會執行 Python 測試、檢查 benchmark 腳本的 Python 語法，並對瀏覽器 / 建置 JavaScript 執行 `node --check`。
-The test script runs the Python tests, checks the benchmark script's syntax, and runs `node --check` on the browser/build JavaScript.
+檢查內容集中在 `scripts/check.mjs`（跨平台）：`ruff` lint、`pytest`、benchmark 腳本的 Python 語法檢查，以及對 `static/*.js` 與 `scripts/*.mjs` 逐檔 `node --check`。JavaScript 檔案清單為自動掃描，不需手動維護。`.\scripts\run-tests.ps1` 仍可用，只是轉呼叫同一支腳本；`npm run lint` 只跑 lint。
+Checks live in `scripts/check.mjs` (cross-platform): `ruff` lint, `pytest`, a syntax check of the benchmark script, and `node --check` over every `static/*.js` and `scripts/*.mjs` — the file list is globbed, not hand-maintained. `.\scripts\run-tests.ps1` still works and forwards to the same script; `npm run lint` runs lint only.
+
+測試不需要 `ultralytics`/`torch`/`transformers`（套件在測試中被替身取代），因此 CI 只安裝 `requirements-ci.txt`。
+The tests need no `ultralytics`/`torch`/`transformers` — they are faked — so CI installs only `requirements-ci.txt`.
 
 ### npm Scripts
 
@@ -181,7 +184,8 @@ The test script runs the Python tests, checks the benchmark script's syntax, and
 | `npm run build` | 建置靜態 GitHub Pages 展示頁到 `dist/` / build the static demo. |
 | `npm run tailscale` | 透過 Tailscale Serve 以 HTTPS 對外公開 / expose over HTTPS. |
 | `npm run bench` | 執行偵測器 benchmark / run the detector benchmark. |
-| `npm test` | 執行測試套件 / run the test suite. |
+| `npm test` | 執行完整檢查（lint + 測試 + 語法）/ run the full check set. |
+| `npm run lint` | 只執行 `ruff` lint / run `ruff` only. |
 
 ---
 
@@ -352,8 +356,9 @@ See **`TUNING.md`** for in-depth GPU/accuracy tuning, preset switching, open-voc
 | `app/auth.py` | 存取控制：共享權杖驗證與簽章 session cookie。 |
 | `app/config.py` | 環境變數驅動的 `Settings` 與驗證。 |
 | `static/` | 瀏覽器頁面與資產（recorder、viewer、settings）。 |
-| `scripts/` | PowerShell / Node / Python 輔助腳本：setup、run、bench、tailscale、靜態建置、模型 export（`export_engine.py`）。 |
-| `tests/` | Pytest 測試套件。 |
+| `scripts/` | PowerShell / Node / Python 輔助腳本：setup、run、bench、tailscale、靜態建置、模型 export（`export_engine.py`）、跨平台檢查（`check.mjs`）。 |
+| `tests/` | Pytest 測試套件。`conftest.py` 清空所有設定環境變數以隔離每個測試，`helpers.py` 放共用的 payload 建構函式。 |
+| `pyproject.toml` | pytest 與 ruff 設定（本專案不打包成套件）。 |
 | `TUNING.md` | GPU / 精度調校、preset 切換、開放詞彙與分類器完整說明。 |
 
 ---

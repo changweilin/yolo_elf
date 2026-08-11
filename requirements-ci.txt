@@ -1,0 +1,18 @@
+# What the checks actually need — see requirements.txt for running the app.
+#
+# The suite substitutes a fake `ultralytics` module and never imports torch or
+# transformers (app/detector.py and app/vlm.py import torch lazily, inside the
+# functions that need a device). Installing the real ones in CI costs several
+# GB of CUDA wheels and proves nothing, because a green run against the fake
+# says nothing about the installed Ultralytics version either way.
+#
+# This is a floor, not a ceiling: if a test ever needs a real model, CI fails
+# with an ImportError and the dependency gets added here deliberately.
+fastapi>=0.115
+uvicorn[standard]>=0.34
+numpy>=1.26
+pillow>=10
+pytest>=8
+httpx>=0.27
+websockets>=13
+ruff>=0.14

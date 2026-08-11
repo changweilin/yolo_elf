@@ -2,8 +2,9 @@ import json
 
 import pytest
 
-from app.config import get_settings
-from app.zones import ZoneEngine, build_zones, parse_zones, point_in_polygon
+from app.zones import ZoneEngine, parse_zones, point_in_polygon
+from helpers import detection as _detection
+from helpers import settings_from
 
 
 # A unit square covering the top-left quadrant of a normalized frame.
@@ -11,17 +12,8 @@ SQUARE = ({"name": "tl", "points": [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.
 
 
 def _engine(monkeypatch, zones=None):
-    monkeypatch.delenv("ZONES", raising=False)
-    if zones is not None:
-        monkeypatch.setenv("ZONES", json.dumps(zones))
-    return ZoneEngine(get_settings())
-
-
-def _detection(boxes, width=100, height=100, error=None):
-    detection = {"frame_id": 1, "width": width, "height": height, "boxes": boxes}
-    if error is not None:
-        detection["error"] = error
-    return detection
+    env = {} if zones is None else {"ZONES": json.dumps(zones)}
+    return ZoneEngine(settings_from(monkeypatch, **env))
 
 
 # --- geometry -----------------------------------------------------------------
