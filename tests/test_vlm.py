@@ -1,19 +1,8 @@
 import io
 from contextlib import nullcontext
 
-from app.config import get_settings
 from app.vlm import VLM_BOX_CONFIDENCE, VlmEngine, florence_od_to_boxes
-
-
-def _settings(monkeypatch, **env):
-    for name in (
-        "VLM_ENABLED", "VLM_MODEL", "VLM_INTERVAL_SEC", "VLM_DETECT_TASK",
-        "VLM_CAPTION", "VLM_CAPTION_TASK", "YOLO_CLASSES", "YOLO_DEVICE", "YOLO_HALF",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    return get_settings()
+from helpers import settings_from as _settings
 
 
 # --- florence_od_to_boxes (pure) ---------------------------------------------

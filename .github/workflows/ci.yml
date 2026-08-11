@@ -14,13 +14,20 @@ concurrency:
 
 jobs:
   test:
-    name: Test
-    runs-on: windows-latest
+    # Windows is the development platform and the only one the PowerShell
+    # scripts target; Linux proves the app itself has no platform assumptions
+    # (path separators, SQLite paths, the static build).
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
 
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PYTHONUNBUFFERED: "1"
-      YOLO_CONFIG_DIR: ${{ github.workspace }}\.ultralytics
+      YOLO_CONFIG_DIR: ${{ github.workspace }}/.ultralytics
 
     steps:
       - name: Checkout
@@ -37,14 +44,26 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install Python dependencies
-        run: python -m pip install -r requirements.txt
+      - name: Install check dependencies
+        run: python -m pip install -r requirements-ci.txt
 
-      - name: Run tests
+      # The checks never install ultralytics/torch, so nothing else proves the
+      # full runtime set still resolves. Metadata-only, no multi-GB downloads.
+      - name: Resolve full runtime dependencies
+        run: python -m pip install --dry-run --quiet -r requirements.txt
+
+      # Lint, pytest, py_compile and node --check, identically on both runners.
+      - name: Run checks
         run: npm test
+        env:
+          YOLO_ELF_PYTHON: python
 
       - name: Build static web demo
         run: npm run build:github-pages
+
+      - name: Check the demo build produced a page
+        shell: bash
+        run: test -s dist/index.html
 
   pages:
     name: GitHub Pages

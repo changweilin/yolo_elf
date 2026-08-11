@@ -13,43 +13,6 @@ from app.main import create_app
 from app.recordings import RecordingStore
 
 
-REMOTE_ENV = [
-    "RECORDING_ENABLED",
-    "RECORDING_KEEP_LOCAL_COPY",
-    "RECORDING_STORAGE_DIR",
-    "RECORDING_MAX_BYTES",
-    "REMOTE_STORAGE_URL",
-    "REMOTE_STORAGE_TOKEN",
-    "REMOTE_STORAGE_INCLUDE_FRAME",
-    "REMOTE_STORAGE_RECORDING_URL",
-    "REMOTE_STORAGE_QUEUE_SIZE",
-    "REMOTE_STORAGE_TIMEOUT",
-    "REMOTE_STORAGE_RETRIES",
-    "ALERT_RULES",
-    "ALERT_WEBHOOK_URL",
-    "ALERT_WEBHOOK_TOKEN",
-    "ALERT_COOLDOWN_SEC",
-    "ZONES",
-    "EVENT_LOG_ENABLED",
-    "EVENT_DB_PATH",
-    "EVENT_EXPIRY_SEC",
-    "METRICS_ENABLED",
-    "AUTH_TOKEN",
-    "AUTH_SESSION_TTL",
-    "CAMERAS",
-    "MAX_CAMERAS",
-]
-
-
-@pytest.fixture(autouse=True)
-def clear_remote_env(monkeypatch):
-    for name in REMOTE_ENV:
-        monkeypatch.delenv(name, raising=False)
-    # Event logging defaults on and writes a SQLite file; keep it off unless a
-    # test opts in with a tmp path, so the suite never touches the repo root.
-    monkeypatch.setenv("EVENT_LOG_ENABLED", "0")
-
-
 def test_health_and_pages_load():
     app = create_app()
     with TestClient(app) as client:

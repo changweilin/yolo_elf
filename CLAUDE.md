@@ -1,60 +1,109 @@
-# CLAUDE.md — YOLO Elf 專案記憶
+# CLAUDE.md — YOLO Elf
 
-> 這份是宏觀原則。各職能的細部規範在 `.claude/skills/yolo-elf-*/SKILL.md`（分工矩陣見 `docs/ai-agent-matrix.md`）。原則與細則衝突時，以本檔為準。
+> Macro principles. Per-role detail lives in `.claude/skills/yolo-elf-*/SKILL.md`
+> (division of labour: `docs/ai-agent-matrix.md`). This file wins on conflict.
+> Written in English for agents; product copy is not — see rule 15.
 
-## 專案是什麼
+## What this is
 
-FastAPI + WebSocket + 靜態前端的即時物件偵測 app：手機（錄影端）把 JPEG 影格推到 `/ws/camera`，伺服器以單一 GPU worker 跑 YOLO 推論，把畫面與偵測框廣播給所有 `/ws/viewer`。推論完全在本機，畫面預設不離開主機。
+FastAPI + WebSocket + framework-free static frontend, real-time detection. The
+phone (recorder) pushes JPEG frames to `/ws/camera`; a **single** GPU worker runs
+YOLO inference and broadcasts frames + boxes to every `/ws/viewer`. Inference is
+fully local; frames do not leave the host by default.
 
-roadmap 上的功能（追蹤、告警、zones、歷史、驗證、指標、export、多相機、VLM 通道）皆已完成；後續是維護與增量改進。
+Feature work is complete — tracking, alerts, ROI zones, SQLite history, auth,
+metrics, ONNX/TensorRT export, multi-camera, VLM channel, recordings, and the
+YOLO26 multi-head task channels (`detect`/`segment`/`pose`/`obb`/`openvocab`/
+`semantic`/`depth`, up to `MAX_ACTIVE_TASKS`, one raster head at a time). What
+remains is maintenance and incremental improvement.
 
-## 模組地圖
+## Module map
 
-- `app/` — 每個功能一個模組（`config` 設定、`main` 路由與 worker、`stream_state` 串流狀態、`detector` 推論、`zones`/`alerts`/`events` 區域/告警/SQLite 歷史、`auth`/`metrics`/`recordings`/`remote_storage`/`vlm`）。
-- `static/` — 無框架前端（`phone` 錄影端、`viewer` 檢視端、`history`/`settings`/`login` 頁、共用 `app.css`/`theme.js`）。
-- `scripts/` — PowerShell 啟動/測試/benchmark 腳本 + Node 靜態建置（`build-static.mjs` 產 GitHub Pages demo）。
-- `tests/` — `test_<feature>.py` 單元測試 + `test_app.py` 真實 ASGI lifespan 測試。
-- 文件 — `README.md`（功能列、設定表、API 表、專案結構）、`TUNING.md`（操作與調校）。
+- `app/` — one module per concern: `config` (settings), `main` (routes + worker),
+  `stream_state` (per-camera channels, frame queue), `detector` (inference),
+  `zones` / `alerts` / `events` (regions, rules, SQLite history), plus `auth`,
+  `metrics`, `recordings`, `remote_storage`, `vlm`.
+- `static/` — `phone` (recorder), `viewer` (display only), `history` / `settings`
+  / `login` pages, shared `app.css` / `theme.js` / `mode-switch.js`.
+- `scripts/` — PowerShell run/test/bench scripts + Node static build
+  (`build-static.mjs` produces the GitHub Pages demo).
+- `tests/` — `test_<feature>.py` unit tests + `test_app.py` over a real ASGI
+  lifespan.
+- Docs — `README.md` (features, settings table, API table, structure),
+  `TUNING.md` (operations and tuning).
 
-## 核心原則
+## Core principles
 
-**架構**
-1. 新功能 = 獨立的 `app/<feature>.py`：純函式 + Engine/Registry 類別，`__init__(settings)` 內 fail-loud 驗證。
-2. GPU 存取由**單一** detection worker 序列化——不要每路/每請求開 thread 搶 GPU。低延遲靠「單槽佇列只留最新影格、丟舊的」，不靠排隊。
-3. 效能主張一律用 benchmark（`scripts/bench_detector.py`）佐證，不憑直覺；GPU 專屬優化必須能在 CPU 上優雅退化。
+**Architecture**
+1. A new feature is its own `app/<feature>.py`: pure functions + an
+   Engine/Registry class that fail-loud validates in `__init__(settings)`.
+2. GPU access is serialized by a **single** detection worker — never spawn a
+   thread per stream or per request to contend for the GPU. Low latency comes
+   from a single-slot queue that keeps only the newest frame and drops the rest,
+   not from queueing.
+3. Back every performance claim with `scripts/bench_detector.py`, never
+   intuition. GPU-only optimizations must degrade gracefully on CPU.
 
-**設定**
-4. 所有設定走 `app/config.py` 的既有 helper（`_bool_env`/`_bounded_int_env`/`_bounded_float_env`/`_list_env`/`_choice_env`），欄位進 `Settings`；數值必須有界、錯誤訊息要明確。
-5. 預設值 = 最安全、最接近舊行為的那個。隱私敏感功能（遠端上傳、影格外傳）一律 opt-in。
+**Configuration**
+4. All settings go through the existing `app/config.py` helpers (`_bool_env`,
+   `_bounded_int_env`, `_bounded_float_env`, `_list_env`, `_choice_env`) and land
+   as `Settings` fields. Numbers must be bounded; errors must be specific.
+5. Defaults are the safest option and the closest to prior behavior. Anything
+   privacy-sensitive (remote upload, frames leaving the host) is opt-in.
 
-**隱私與安全**
-6. 畫面不離機是產品承諾；任何把影格送出主機的路徑都必須顯式啟用。
-7. 對外端點（webhook、遠端儲存 URL）**只能由環境變數設定**，不開放 runtime API 修改（SSRF 防護）。權杖不進網址、不進 log。
+**Privacy and security**
+6. "Frames stay on the host" is a product promise: every path that ships a frame
+   off-box must be explicitly enabled.
+7. Outbound endpoints (webhook, remote storage URL) are **env-var only** — never
+   settable through a runtime API (SSRF guard). Tokens never go in URLs or logs.
 
-**相容性**
-8. 改動用「加維度」而非「換行為」：新參數可選、不帶 = 舊行為；未設定新功能時行為與過去逐位元相同（範例：`CAMERAS` 留空 = 單相機）。
-9. SQLite schema 演進用 `ALTER TABLE ADD COLUMN` 平滑升級，舊資料容忍 NULL。
-10. 對外契約保持穩定：WebSocket `payload.type` 值、JSON-then-binary 影格順序、DOM id、路由、環境變數名——改名即破壞，寧可新增不要改名。
+**Compatibility**
+8. Add a dimension, don't swap behavior: new parameters are optional and absent
+   means the old path, bit-for-bit (e.g. empty `CAMERAS` = single camera, unset
+   `DETECT_TASKS` = the previous single-head pipeline).
+9. Evolve the SQLite schema with `ALTER TABLE ADD COLUMN`; tolerate NULL in old
+   rows.
+10. External contracts are frozen: WebSocket `payload.type` values, the
+    JSON-then-binary frame order, DOM ids, routes, env var names. Renaming
+    breaks them — add rather than rename.
 
-**幾何與數值**
-11. 偵測框是 `xyxy` 來源影像像素座標；跨 Python/JS 邊界時先寫下來源與目的座標空間再動手。`clamp_xyxy` 收邊、`fitContain` 對齊 CSS `object-fit: contain`、canvas 經 `devicePixelRatio` 校正；zones 用 0–1 正規化座標。
+**Geometry and numbers**
+11. Boxes are `xyxy` in **source-image pixels**. Crossing the Python/JS boundary,
+    write down the source and target coordinate space before touching anything.
+    `clamp_xyxy` clips, `fitContain` mirrors CSS `object-fit: contain`, canvas is
+    corrected by `devicePixelRatio`; zones use 0–1 normalized coordinates.
 
-**測試與驗證**
-12. 每個 PR：`pytest` 全綠 + 改動的 JS 過 `node --check`。Windows 上用 `npm.cmd run test`（=pytest + py_compile + node --check）；UI 變更盡量瀏覽器實跑（無頭分頁會暫停 rAF，canvas 幾何需手動驗證）。
-13. app 層測試走真實 ASGI lifespan；autouse fixture 要清乾淨相關環境變數。
+**Testing**
+12. Every PR: `npm test` green. It runs `scripts/check.mjs` — ruff, pytest,
+    py_compile, and `node --check` over every `static/*.js` and `scripts/*.mjs`
+    — the same set CI runs on Windows and Linux. Exercise UI changes in a real
+    browser: headless tabs pause rAF, so canvas geometry needs manual checking.
+13. App-level tests run a real ASGI lifespan. Test isolation is central:
+    `tests/conftest.py` clears every settings env var before each test, and
+    `test_settings_env_covers_every_setting` fails when `app/config.py` grows a
+    variable that list is missing. Add new settings there, not to a local list.
+    Shared payload builders live in `tests/helpers.py`.
+14. The suite fakes `ultralytics` and never imports torch, so CI installs only
+    `requirements-ci.txt`. A green run proves nothing about the installed
+    Ultralytics version — for that, benchmark against the repo-root `.venv`.
 
-**文件與展示**
-14. 功能落地 = 程式 + 測試 + README（設定表/API 表）+ TUNING（操作說明）+ 靜態 demo 有對應展示，一次到位；文件表格必須與 `app/config.py` 一致。
-15. 文案以 zh-TW 為主、README 雙語；commit 訊息用 zh-TW。UI 標籤保持精簡，避免手機 topbar 溢出。
+**Docs and demo**
+15. Shipping a feature means code + tests + README (settings/API tables) +
+    TUNING (how to operate it) + a matching static-demo surface, in one pass.
+    Doc tables must match `app/config.py` exactly.
+16. Product copy is zh-TW first, README bilingual, commit messages zh-TW. Keep UI
+    labels short so the mobile topbar does not overflow.
 
-## 常用命令
+## Commands
 
-| 目的 | 命令 |
+| Purpose | Command |
 | --- | --- |
-| 測試（Windows） | `npm.cmd run test` |
-| 測試（跨平台） | `python -m pytest -q` + `node --check <改動的 js>` |
-| 靜態 demo 建置 | `npm run build` |
-| 本機開發 | `npm run dev:local` → `/phone`、`/viewer` |
+| All checks | `npm test` (Windows: `npm.cmd run test`) |
+| Lint only | `npm run lint` |
+| Static demo build | `npm run build` |
+| Local dev | `npm run dev:local` → `/phone`, `/viewer` |
 | Benchmark | `.\scripts\bench.ps1 -Frames 20 -Warmup 3 -Device cpu -ImgSize 960 -Quality 0.85` |
 
-CI（`.github/workflows/ci.yml`）在 windows-latest 跑 `npm test` + 靜態建置，main 分支另行部署 GitHub Pages。
+CI (`.github/workflows/ci.yml`) runs the checks and the static build on both
+windows-latest and ubuntu-latest, resolves the full `requirements.txt` without
+installing it, and deploys GitHub Pages from `main`.

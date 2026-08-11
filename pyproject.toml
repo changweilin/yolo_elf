@@ -1,0 +1,31 @@
+# Tooling config only — the app is run from source, not installed as a package.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Without this, `pytest` only works when invoked as `python -m pytest` from the
+# repo root, because that is what puts `app` on sys.path.
+pythonpath = ["."]
+addopts = "-q --strict-markers --strict-config"
+# An exception escaping a __del__ or an asyncio callback is otherwise reported
+# as a warning and the test still passes.
+filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# Deliberately narrow: rules that catch real defects, not formatting opinions.
+# E9 = syntax/IO errors, F = pyflakes (undefined names, dead imports),
+# B = bugbear (mutable defaults, loop-variable capture, silent except).
+# Import sorting and line-length style are left out on purpose — enforcing them
+# would rewrite every existing module for no defect caught.
+select = ["E9", "F", "B"]
+# zip(..., strict=) changes runtime behaviour on ragged input; the two call
+# sites in detector.py pair a model's boxes with its own names and are meant to
+# be equal-length, but flipping them is a behaviour change, not a lint fix.
+ignore = ["B905"]
+
+[tool.ruff.lint.per-file-ignores]
+# The benchmark CLI puts the repo on sys.path before importing from `app`.
+"scripts/bench_detector.py" = ["E402"]

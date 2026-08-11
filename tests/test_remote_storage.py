@@ -10,27 +10,7 @@ from app.remote_storage import RemoteStorage
 from app.stream_state import CameraFrame
 
 
-REMOTE_ENV = [
-    "RECORDING_ENABLED",
-    "RECORDING_STORAGE_DIR",
-    "RECORDING_MAX_BYTES",
-    "REMOTE_STORAGE_URL",
-    "REMOTE_STORAGE_TOKEN",
-    "REMOTE_STORAGE_INCLUDE_FRAME",
-    "REMOTE_STORAGE_RECORDING_URL",
-    "REMOTE_STORAGE_QUEUE_SIZE",
-    "REMOTE_STORAGE_TIMEOUT",
-    "REMOTE_STORAGE_RETRIES",
-]
-
-
-def clear_remote_env(monkeypatch):
-    for name in REMOTE_ENV:
-        monkeypatch.delenv(name, raising=False)
-
-
 def test_remote_storage_is_disabled_without_endpoint(monkeypatch):
-    clear_remote_env(monkeypatch)
     storage = RemoteStorage(get_settings())
 
     async def run():
@@ -49,7 +29,6 @@ def test_remote_storage_is_disabled_without_endpoint(monkeypatch):
 
 
 def test_remote_storage_posts_detection_payload(monkeypatch):
-    clear_remote_env(monkeypatch)
     monkeypatch.setenv("REMOTE_STORAGE_URL", "https://storage.example/events")
     monkeypatch.setenv("REMOTE_STORAGE_TOKEN", "secret-token")
     monkeypatch.setenv("REMOTE_STORAGE_INCLUDE_FRAME", "1")
@@ -97,7 +76,6 @@ def test_remote_storage_posts_detection_payload(monkeypatch):
 
 
 def test_remote_storage_posts_recording_payload(monkeypatch, tmp_path):
-    clear_remote_env(monkeypatch)
     monkeypatch.setenv("REMOTE_STORAGE_RECORDING_URL", "https://storage.example/recordings")
     monkeypatch.setenv("REMOTE_STORAGE_TOKEN", "secret-token")
     settings = get_settings()
@@ -167,7 +145,6 @@ def test_remote_storage_posts_recording_payload(monkeypatch, tmp_path):
 
 
 def test_remote_only_recording_staging_file_is_removed_after_upload(monkeypatch, tmp_path):
-    clear_remote_env(monkeypatch)
     monkeypatch.setenv("REMOTE_STORAGE_RECORDING_URL", "https://storage.example/recordings")
     settings = get_settings()
     recording_path = tmp_path / "rec-test.webm"
